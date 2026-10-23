@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pswitch"
+version = "0.1.3"
+description = "一个本地端口，多个上游代理，随时切换"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "walter" }]
+dependencies = []
+
+[project.scripts]
+pswitch = "pswitch.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pswitch"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/pswitch",
+  "README.md",
+  "pyproject.toml",
+]
