@@ -14,15 +14,24 @@
 ## 安装
 
 ```bash
-uv tool install ~/script/proxy_switch
+uv tool install pswitch
 # 或者
-pip install ~/script/proxy_switch
+pip install pswitch
 ```
 
 升级：
 
 ```bash
-uv tool install --force ~/script/proxy_switch
+uv tool upgrade pswitch
+# 或者
+pip install -U pswitch
+```
+
+从源码安装（开发用）：
+
+```bash
+git clone https://github.com/WalterYOO/pswitch.git
+uv tool install ./pswitch
 ```
 
 安装后可执行文件位于 `~/.local/bin/pswitch`，确认该目录在 `PATH` 中：

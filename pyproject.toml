@@ -4,13 +4,30 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pswitch"
-version = "0.1.3"
+version = "0.1.4"
 description = "一个本地端口，多个上游代理，随时切换"
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT" }
-authors = [{ name = "walter" }]
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Walter LIU" }]
+keywords = ["proxy", "http-proxy", "socks5", "port", "switch", "macos"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Internet :: Proxy Servers",
+  "Topic :: System :: Networking",
+]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/WalterYOO/pswitch"
+Repository = "https://github.com/WalterYOO/pswitch"
+Issues = "https://github.com/WalterYOO/pswitch/issues"
 
 [project.scripts]
 pswitch = "pswitch.cli:main"
@@ -22,5 +39,6 @@ packages = ["src/pswitch"]
 include = [
   "src/pswitch",
   "README.md",
+  "LICENSE",
   "pyproject.toml",
 ]
