@@ -75,14 +75,14 @@ go build -o bin/pswitch ./cmd/pswitch
 
 ## 用 bench 测它
 
-在仓库根目录：
+先构建 `go/bin/pswitch`，然后在仓库根目录：
 
 ```bash
-PSWITCH_BIN=$PWD/go/bin/pswitch python3 bench/bench.py all
+python bench/bench.py all --impl go
 ```
 
-不设置 `PSWITCH_BIN` 时跑 Python 版；两条路径使用完全相同的用例、端口和统计口径，
-结果目录里的 `meta.json` 会记录 `pswitch_impl` 与 `pswitch_binary`。
+不加 `--impl` 时跑 Python 版；各实现使用完全相同的用例、端口和统计口径，
+结果目录里的 `meta.json` 会记录 `impl` 与 `binary`。
 
 ## 测试
 

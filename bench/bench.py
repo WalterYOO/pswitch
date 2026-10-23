@@ -44,18 +44,12 @@ REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "src"
 TARGET = Path(__file__).resolve().parent / "target.py"
 RESULT_ROOT = REPO / "bench" / "results"
+GO_BIN = REPO / "go" / "bin" / "pswitch"
+RUST_BIN = REPO / "rust" / "target" / "release" / "pswitch"
 
-# 可选：PSWITCH_BIN 指向另一份 pswitch 可执行文件（例如 Go 版）。
-# 不设置时跑仓库里的 Python 版，两条路径使用完全相同的用例与统计口径。
-PSWITCH_BIN = os.environ.get("PSWITCH_BIN")
-
-
-def pswitch_cmd():
-    """返回启动守护进程的命令前缀。"""
-    if PSWITCH_BIN:
-        return [str(Path(PSWITCH_BIN).expanduser().resolve()), "serve"]
-    return [sys.executable, "-m", "pswitch", "serve"]
-
+# 由 main() 根据 --impl / --binary 设置；None 表示用 `python -m pswitch`。
+IMPL = "python"
+BIN_PATH = None
 
 PROXY_ENV_KEYS = (
     "http_proxy", "https_proxy", "all_proxy",
@@ -313,9 +307,11 @@ class Instance(Proc):
         child_env = clean_env()
         # 硬隔离：子进程只能读这次运行自己的 PSWITCH_HOME。
         child_env["PSWITCH_HOME"] = str(self.home)
+        cmd = ([BIN_PATH, "serve"] if BIN_PATH
+               else [sys.executable, "-m", "pswitch", "serve"])
         super().__init__(
             name,
-            pswitch_cmd(),
+            cmd,
             env=child_env,
             log_path=self.home / "stdout.log")
 
@@ -952,6 +948,9 @@ def time_to_eof(port, timeout):
             data = s.recv(1)
         except socket.timeout:
             return None
+        except ConnectionResetError:
+            # RST 同样属于"快速失败"，不是挂住
+            return (time.perf_counter_ns() - t0) / 1000.0
         return (time.perf_counter_ns() - t0) / 1000.0 if data == b"" else None
     finally:
         s.close()
@@ -1098,8 +1097,9 @@ def build_summary(env, args, meta, results):
     L.append(f"- 时间: {meta['started_at']}")
     L.append(f"- 主机: {meta['host']} / {meta['platform']} / Python {meta['python']}")
     L.append(f"- CPU 核心: {meta['cpu_count']}")
-    L.append(f"- pswitch: {meta['pswitch_version']} "
-             f"({meta.get('pswitch_impl', 'python')}, git {meta['git_commit']})")
+    L.append(f"- 实现: {meta.get('impl', 'python')}"
+             + (f" (`{meta['binary']}`)" if meta.get("binary") else ""))
+    L.append(f"- pswitch: {meta['pswitch_version']} (git {meta['git_commit']})")
     L.append(f"- 结果目录: `{env.root}`")
     L.append("")
     L.append("所有 pswitch 实例都使用临时 `PSWITCH_HOME`，"
@@ -1333,7 +1333,12 @@ def build_summary(env, args, meta, results):
     L.append("## 复现")
     L.append("")
     L.append("```bash")
-    L.append(f"python bench/bench.py {args.mode}"
+    extra = ""
+    if args.impl != "python":
+        extra += f" --impl {args.impl}"
+    if args.binary:
+        extra += f" --binary {args.binary}"
+    L.append(f"python bench/bench.py {args.mode}{extra}"
              + (f" --out {env.root}" if args.out else ""))
     L.append("```")
     L.append("")
@@ -1355,6 +1360,10 @@ def parse_args(argv=None):
     p.add_argument("mode", choices=["micro", "loaded", "throughput",
                                     "macro", "failover", "e2e", "all"])
     p.add_argument("--out", help="结果目录（默认 bench/results/<时间戳>）")
+    p.add_argument("--impl", choices=["python", "rust", "go"], default="python",
+                   help="被测实现：python / rust / go（各自使用默认二进制路径）")
+    p.add_argument("--binary",
+                   help="覆盖被测 pswitch 可执行文件路径（需支持 serve 子命令）")
     p.add_argument("--offset", type=int, default=0,
                    help="所有测试端口统一加偏移，端口冲突时用（如 100）")
     p.add_argument("--rounds", type=int, default=3, help="微基准轮数")
@@ -1424,11 +1433,10 @@ def git_commit():
 
 
 def pswitch_version():
-    if PSWITCH_BIN:
+    if BIN_PATH:
         try:
-            out = subprocess.run(
-                [pswitch_cmd()[0], "version"],
-                capture_output=True, text=True, timeout=10).stdout.strip()
+            out = subprocess.run([BIN_PATH, "version"], capture_output=True,
+                                 text=True, timeout=5).stdout.strip()
             return out.replace("pswitch ", "") or "-"
         except Exception:
             return "-"
@@ -1441,10 +1449,29 @@ def pswitch_version():
 
 
 def main(argv=None):
+    global IMPL, BIN_PATH
     args = parse_args(argv)
     if args.mode == "e2e" and not args.upstream:
         raise SystemExit("e2e 需要 --upstream host:port")
 
+    IMPL = args.impl
+    candidate = args.binary
+    if not candidate:
+        if args.impl == "rust":
+            candidate = str(RUST_BIN)
+        elif args.impl == "go":
+            candidate = str(GO_BIN)
+    if candidate:
+        if not Path(candidate).is_file():
+            hint = {
+                "rust": "cargo build --release --manifest-path rust/Cargo.toml",
+                "go": "(cd go && go build -o bin/pswitch ./cmd/pswitch)",
+            }.get(args.impl, "构建或指定 --binary")
+            raise SystemExit(
+                f"找不到被测可执行文件: {candidate}\n先构建: {hint}")
+        BIN_PATH = candidate
+    else:
+        BIN_PATH = None
     env = Env(args)
     meta = {
         "plan_version": "v1",
@@ -1455,9 +1482,8 @@ def main(argv=None):
         "python": platform.python_version(),
         "cpu_count": os.cpu_count(),
         "pswitch_version": pswitch_version(),
-        "pswitch_impl": "go" if PSWITCH_BIN else "python",
-        "pswitch_binary": (str(Path(PSWITCH_BIN).expanduser().resolve())
-                           if PSWITCH_BIN else None),
+        "impl": IMPL,
+        "binary": BIN_PATH,
         "git_commit": git_commit(),
         "argv": sys.argv[1:],
         "ports": {

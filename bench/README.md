@@ -19,20 +19,29 @@ bench/results/<YYYYMMDD-HHMMSS>/SUMMARY.md
 结果目录里有 `meta.json`、各用例 JSON、`SUMMARY.md` 和每个测试实例的配置/日志。
 每次运行都会新建目录，不会覆盖历史结果。
 
-## 测另一份实现（Go 版）
+## 比较不同实现
 
-`PSWITCH_BIN` 可以把被测对象换成任意兼容的可执行文件，用例、端口、统计口径完全不变：
+默认跑仓库里的 Python 版；`--impl` 可切到 Rust 或 Go 版（需先构建）：
 
 ```bash
-# 先构建 Go 版
+cargo build --release --manifest-path rust/Cargo.toml
 (cd go && go build -o bin/pswitch ./cmd/pswitch)
 
-# 用同一套基准测 Go 版
-PSWITCH_BIN=$PWD/go/bin/pswitch python3 bench/bench.py all
+python bench/bench.py all --impl rust   --offset 100
+python bench/bench.py all --impl go     --offset 100
+python bench/bench.py all --impl python --offset 100
 ```
 
-不设置该变量时仍测仓库里的 Python 版。`meta.json` 会记录
-`pswitch_impl`（`python` / `go`）与 `pswitch_binary`，方便区分结果来源。
+- `--impl rust` / `--impl go` 分别使用 `rust/target/release/pswitch` 与
+  `go/bin/pswitch`，缺失时会提示对应的构建命令。
+- `--binary PATH` 可指向任意 `pswitch` 可执行文件（会被以 `serve` 调用），
+  用于测其它构建产出或第三份实现。
+- 每次运行的结果都在 `SUMMARY.md` 顶部标注实现与二进制路径，
+  `meta.json` 里也有 `impl` / `binary` 字段，便于配对比较。
+- 两轮 `all` 必须串行：同时跑会互相污染吞吐与尾延迟。
+
+Rust 与 Go 版的对照数据与解读分别见
+[`rust/README.md`](../rust/README.md) 和 [`go/README.md`](../go/README.md)。
 
 ## 隔离保证
 
