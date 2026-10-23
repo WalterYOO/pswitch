@@ -1338,6 +1338,10 @@ def build_summary(env, args, meta, results):
         extra += f" --impl {args.impl}"
     if args.binary:
         extra += f" --binary {args.binary}"
+    if args.offset:
+        extra += f" --offset {args.offset}"
+    if args.upstream:
+        extra += f" --upstream {args.upstream}"
     L.append(f"python bench/bench.py {args.mode}{extra}"
              + (f" --out {env.root}" if args.out else ""))
     L.append("```")
