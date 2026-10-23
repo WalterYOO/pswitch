@@ -194,7 +194,8 @@ python bench/bench.py all --impl rust
 结果写入 `bench/results/<时间戳>/SUMMARY.md`。
 测量口径见 [bench/PLAN.md](bench/PLAN.md)（延迟）与
 [bench/THROUGHPUT-PLAN.md](bench/THROUGHPUT-PLAN.md)（吞吐），
-用法与基线结果见 [bench/README.md](bench/README.md)。
+用法与基线结果见 [bench/README.md](bench/README.md)，
+三份实现的横向对比见 [bench/COMPARISON.md](bench/COMPARISON.md)。
 
 ## 注意事项
 

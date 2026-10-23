@@ -42,6 +42,7 @@ python bench/bench.py all --impl python --offset 100
 
 Rust 与 Go 版的对照数据与解读分别见
 [`rust/README.md`](../rust/README.md) 和 [`go/README.md`](../go/README.md)。
+三份实现在同机同轮的横向对比（2026-10-24）见 [`COMPARISON.md`](COMPARISON.md)。
 
 ## 隔离保证
 
