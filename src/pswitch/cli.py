@@ -10,7 +10,7 @@ import sys
 import time
 import urllib.request
 
-from . import launchd
+from . import __version__, launchd
 from .config import (
     CONFIG_PATH,
     HOME,
@@ -393,6 +393,11 @@ def cmd_disable(args):
 # 其他命令
 # --------------------------------------------------------------------------
 
+def cmd_version(args):
+    print(f"pswitch {__version__}")
+    return 0
+
+
 def cmd_env(args):
     cfg = load_config()
     proxy = f"http://{cfg['listen']}"
@@ -572,6 +577,7 @@ def cmd_system(args):
 
 def build_parser():
     p = argparse.ArgumentParser(prog="pswitch", description="一个本地端口，多个上游代理")
+    p.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("serve", help="前台运行转发进程（调试用，通常由 start / launchd 调用）")
@@ -586,6 +592,7 @@ def build_parser():
     sub.add_parser("env", help="打印应设置的代理环境变量")
     sub.add_parser("install", help="安装为 launchd 开机自启")
     sub.add_parser("uninstall", help="卸载开机自启")
+    sub.add_parser("version", help="查看版本号")
 
     u = sub.add_parser("use", help="切换出口：use <名字> | use auto | use direct")
     u.add_argument("target")
@@ -627,7 +634,7 @@ HANDLERS = {
     "env": cmd_env,
     "test": cmd_test, "logs": cmd_logs,
     "install": cmd_install, "uninstall": cmd_uninstall,
-    "system": cmd_system,
+    "system": cmd_system, "version": cmd_version,
 }
 
 
@@ -635,6 +642,9 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     if args.cmd == "serve":
         return serve_main(args.foreground, args.debug)
+    if args.cmd == "version":
+        # 纯查询，不应该顺手创建配置文件
+        return cmd_version(args)
     if ensure_config():
         print(f"已创建配置文件: {CONFIG_PATH}（还没有上游，用 pswitch add 添加）")
     return HANDLERS[args.cmd](args)

@@ -74,6 +74,7 @@ pswitch test            # 经本地端口发真实请求验证
 pswitch env             # 打印代理环境变量
 pswitch disable office  # 临时不用它（如内网代理在当前网络不可达），配置保留
 pswitch enable office   # 恢复
+pswitch version         # 查看当前版本号
 ```
 
 ## 命令
@@ -91,6 +92,7 @@ pswitch enable office   # 恢复
 | `logs [-n 行数]` | 查看日志（`~/.config/proxy_switch/pswitch.log`） |
 | `install` / `uninstall` | 安装/卸载 launchd 开机自启 |
 | `system on\|off\|status` | 把 macOS 系统代理指向/取消指向本地端口 |
+| `version`（或 `-V` / `--version`） | 查看版本号 |
 
 ## 配置文件
 
