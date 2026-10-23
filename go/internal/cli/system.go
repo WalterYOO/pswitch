@@ -116,12 +116,88 @@ func activeNetworkService() string {
 	return ""
 }
 
+func setSystemProxy(svc, host string, port int) {
+	portStr := fmt.Sprintf("%d", port)
+	for _, args := range [][]string{
+		{"-setwebproxy", svc, host, portStr},
+		{"-setsecurewebproxy", svc, host, portStr},
+		{"-setsocksfirewallproxy", svc, host, portStr},
+		{"-setproxybypassdomains", svc, "127.0.0.1", "localhost"},
+	} {
+		_ = exec.Command("networksetup", args...).Run()
+	}
+}
+
+// resolveSystemTarget 把 system use 的参数解析成 host:port：
+// 上游名字优先，否则按 host:port 直接使用。
+func resolveSystemTarget(cfg config.Config, target string) (string, int, bool) {
+	for _, u := range cfg.Upstreams {
+		if u.Name == target {
+			if !u.Enabled {
+				fmt.Printf("%s 已被禁用，先 pswitch enable %s\n", u.Name, u.Name)
+				return "", 0, false
+			}
+			host, port, err := config.SplitHostPort(u.Addr)
+			if err != nil {
+				fmt.Println(err)
+				return "", 0, false
+			}
+			return host, port, true
+		}
+	}
+	if host, port, err := config.SplitHostPort(target); err == nil {
+		return host, port, true
+	}
+	fmt.Printf("没有这个上游也不是合法地址: %s\n", target)
+	fmt.Printf("可选: %s，或直接给 host:port\n", allNames(cfg))
+	return "", 0, false
+}
+
+func cmdSystemUse(cfg config.Config, target string) int {
+	host, port, ok := resolveSystemTarget(cfg, target)
+	if !ok {
+		return 1
+	}
+	svc := activeNetworkService()
+	if svc == "" {
+		fmt.Println("找不到当前活动的网络服务")
+		return 1
+	}
+	setSystemProxy(svc, host, port)
+	named := false
+	for _, u := range cfg.Upstreams {
+		if u.Name == target {
+			named = true
+			break
+		}
+	}
+	if named {
+		fmt.Printf("系统代理（%s）已直接指向上游 %s (%s:%d)\n", svc, target, host, port)
+	} else {
+		fmt.Printf("系统代理（%s）已直接指向 %s:%d\n", svc, host, port)
+	}
+	fmt.Println("注意：这不经过 pswitch，use / 故障转移都不生效；恢复本地端口: pswitch system on")
+	return 0
+}
+
 func cmdSystem(args []string) int {
-	if len(args) != 1 || (args[0] != "on" && args[0] != "off" && args[0] != "status") {
-		fmt.Fprintln(os.Stderr, "用法: pswitch system on|off|status")
+	const usage = "用法: pswitch system on|off|status|use <上游名字|host:port>"
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, usage)
 		return 2
 	}
 	action := args[0]
+	if action == "use" {
+		if len(args) != 2 {
+			fmt.Fprintln(os.Stderr, usage)
+			return 2
+		}
+		return cmdSystemUse(config.Load(), args[1])
+	}
+	if (action != "on" && action != "off" && action != "status") || len(args) != 1 {
+		fmt.Fprintln(os.Stderr, usage)
+		return 2
+	}
 	cfg := config.Load()
 	if cfg.Mode != config.ModeDirect && !requireUpstreams(cfg, "修改系统代理") {
 		return 1
@@ -154,10 +230,7 @@ func cmdSystem(args []string) int {
 	}
 
 	if action == "on" {
-		run("-setwebproxy", svc, host, portStr)
-		run("-setsecurewebproxy", svc, host, portStr)
-		run("-setsocksfirewallproxy", svc, host, portStr)
-		run("-setproxybypassdomains", svc, "127.0.0.1", "localhost")
+		setSystemProxy(svc, host, port)
 		fmt.Printf("系统代理（%s）已指向 %s:%s\n", svc, host, portStr)
 		return 0
 	}

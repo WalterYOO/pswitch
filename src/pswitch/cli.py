@@ -523,8 +523,66 @@ def active_network_service():
     return None
 
 
+def _apply_system_proxy(svc, host, port):
+    for cmd in (
+        ["-setwebproxy", svc, host, str(port)],
+        ["-setsecurewebproxy", svc, host, str(port)],
+        ["-setsocksfirewallproxy", svc, host, str(port)],
+        ["-setproxybypassdomains", svc, "127.0.0.1", "localhost"],
+    ):
+        subprocess.run(["networksetup", *cmd], capture_output=True)
+
+
+def _resolve_system_target(cfg, target):
+    """system use 的参数：上游名字优先，否则按 host:port 直接使用。"""
+    for u in cfg["upstreams"]:
+        if u["name"] == target:
+            if not u["enabled"]:
+                print(f"{u['name']} 已被禁用，先 pswitch enable {u['name']}")
+                return None
+            try:
+                return split_hostport(u["addr"])
+            except ValueError as e:
+                print(e)
+                return None
+    try:
+        return split_hostport(target)
+    except ValueError:
+        names = ", ".join(x["name"] for x in cfg["upstreams"]) or "无"
+        print(f"没有这个上游也不是合法地址: {target}")
+        print(f"可选: {names}，或直接给 host:port")
+        return None
+
+
+def _cmd_system_use(cfg, target):
+    if not target:
+        print("用法: pswitch system use <上游名字|host:port>")
+        return 2
+    resolved = _resolve_system_target(cfg, target)
+    if not resolved:
+        return 1
+    svc = active_network_service()
+    if not svc:
+        print("找不到当前活动的网络服务")
+        return 1
+    host, port = resolved
+    _apply_system_proxy(svc, host, port)
+    u = next((x for x in cfg["upstreams"] if x["name"] == target), None)
+    if u:
+        print(f"系统代理（{svc}）已直接指向上游 {u['name']} ({host}:{port})")
+    else:
+        print(f"系统代理（{svc}）已直接指向 {host}:{port}")
+    print("注意：这不经过 pswitch，use / 故障转移都不生效；恢复本地端口: pswitch system on")
+    return 0
+
+
 def cmd_system(args):
     cfg = load_config()
+    if args.action == "use":
+        return _cmd_system_use(cfg, args.target)
+    if args.target:
+        print(f"用法: pswitch system {args.action}")
+        return 2
     if cfg.get("mode") != "direct" and not require_upstreams(cfg, "修改系统代理"):
         return 1
     if args.action == "on" and not daemon_running():
@@ -540,20 +598,13 @@ def cmd_system(args):
     host, port = split_hostport(cfg["listen"])
     if host == "0.0.0.0":
         host = "127.0.0.1"
-    sets = [
-        ["-setwebproxy", svc, host, str(port)],
-        ["-setsecurewebproxy", svc, host, str(port)],
-        ["-setsocksfirewallproxy", svc, host, str(port)],
-        ["-setproxybypassdomains", svc, "127.0.0.1", "localhost"],
-    ]
     offs = [
         ["-setwebproxystate", svc, "off"],
         ["-setsecurewebproxystate", svc, "off"],
         ["-setsocksfirewallproxystate", svc, "off"],
     ]
     if args.action == "on":
-        for cmd in sets:
-            subprocess.run(["networksetup", *cmd], capture_output=True)
+        _apply_system_proxy(svc, host, port)
         print(f"系统代理（{svc}）已指向 {host}:{port}")
     elif args.action == "off":
         for cmd in offs:
@@ -621,7 +672,9 @@ def build_parser():
     lg.add_argument("-n", "--lines", type=int, default=30)
 
     sy = sub.add_parser("system", help="管理 macOS 系统代理指向")
-    sy.add_argument("action", choices=["on", "off", "status"])
+    sy.add_argument("action", choices=["on", "off", "status", "use"])
+    sy.add_argument("target", nargs="?",
+                    help="use 的目标：上游名字或 host:port（不经过 pswitch 直接指向上游）")
 
     return p
 

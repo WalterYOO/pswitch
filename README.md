@@ -83,6 +83,9 @@ pswitch priority office 1   # 把 office 提到最高优先级
 pswitch list            # 列出全部上游
 pswitch test            # 经本地端口发真实请求验证
 pswitch env             # 打印代理环境变量
+pswitch system on       # 系统代理 -> 本地端口 127.0.0.1:17000
+pswitch system use office    # 系统代理 -> 直接指向 office 的地址（不经过 pswitch）
+pswitch system use 10.0.0.8:8080   # 也可以直接给 host:port
 pswitch disable office  # 临时不用它（如内网代理在当前网络不可达），配置保留
 pswitch enable office   # 恢复
 pswitch version         # 查看当前版本号
@@ -103,6 +106,7 @@ pswitch version         # 查看当前版本号
 | `logs [-n 行数]` | 查看日志（`~/.config/proxy_switch/pswitch.log`） |
 | `install` / `uninstall` | 安装/卸载 launchd 开机自启 |
 | `system on\|off\|status` | 把 macOS 系统代理指向/取消指向本地端口 |
+| `system use <名\|host:port>` | 把系统代理直接指向某个上游（不经过 pswitch；`system on` 可切回本地端口） |
 | `version`（或 `-V` / `--version`） | 查看版本号 |
 
 ## 配置文件
@@ -200,6 +204,8 @@ python bench/bench.py all --impl rust
 ## 注意事项
 
 - 系统代理指向本地端口后，`pswitch` 停掉就等于断网。建议先 `install` 再 `system on`。
+- `pswitch system use` 会让系统代理直接连上游，绕过本地转发：此时 `pswitch use`、
+  auto 选路和故障转移都不生效，上游挂了就直接断网。切回本地端口用 `pswitch system on`。
 - 手动 `use <名字>` 的语义是“钉死”；要自动避开坏上游就用 `use auto`。
 - `no_proxy` 里保留 `127.0.0.1,localhost`，否则访问本地服务可能被绕一圈。
 - 从源码目录执行 `python -m pswitch` 时，注意不要与旧版的 `pswitch.py` 同名冲突；
