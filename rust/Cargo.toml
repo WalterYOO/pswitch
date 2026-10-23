@@ -1,0 +1,25 @@
+[package]
+name = "pswitch"
+version = "0.1.5"
+edition = "2021"
+description = "一个本地端口，多个上游代理，随时切换（Rust 实现，追求高吞吐与低延迟）"
+license = "MIT"
+readme = "../README.md"
+
+[[bin]]
+name = "pswitch"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "macros", "signal", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+libc = "0.2"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

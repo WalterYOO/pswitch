@@ -40,6 +40,17 @@ uv tool install ./pswitch
 command -v pswitch
 ```
 
+### Rust 版（高吞吐 / 低延迟）
+
+仓库内还有一份功能等价的 Rust 实现，配置与状态文件格式完全兼容：
+
+```bash
+cargo build --release --manifest-path rust/Cargo.toml
+install -m 755 rust/target/release/pswitch ~/.local/bin/pswitch
+```
+
+构建方式、设计要点和与 Python 版的基准对照见 [`rust/README.md`](rust/README.md)。
+
 ## 首次运行
 
 代码里**不内置任何上游**。第一次执行任意命令时会自动创建配置文件，
