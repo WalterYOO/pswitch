@@ -45,6 +45,18 @@ SRC = REPO / "src"
 TARGET = Path(__file__).resolve().parent / "target.py"
 RESULT_ROOT = REPO / "bench" / "results"
 
+# 可选：PSWITCH_BIN 指向另一份 pswitch 可执行文件（例如 Go 版）。
+# 不设置时跑仓库里的 Python 版，两条路径使用完全相同的用例与统计口径。
+PSWITCH_BIN = os.environ.get("PSWITCH_BIN")
+
+
+def pswitch_cmd():
+    """返回启动守护进程的命令前缀。"""
+    if PSWITCH_BIN:
+        return [str(Path(PSWITCH_BIN).expanduser().resolve()), "serve"]
+    return [sys.executable, "-m", "pswitch", "serve"]
+
+
 PROXY_ENV_KEYS = (
     "http_proxy", "https_proxy", "all_proxy",
     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
@@ -303,7 +315,7 @@ class Instance(Proc):
         child_env["PSWITCH_HOME"] = str(self.home)
         super().__init__(
             name,
-            [sys.executable, "-m", "pswitch", "serve"],
+            pswitch_cmd(),
             env=child_env,
             log_path=self.home / "stdout.log")
 
@@ -1086,7 +1098,8 @@ def build_summary(env, args, meta, results):
     L.append(f"- 时间: {meta['started_at']}")
     L.append(f"- 主机: {meta['host']} / {meta['platform']} / Python {meta['python']}")
     L.append(f"- CPU 核心: {meta['cpu_count']}")
-    L.append(f"- pswitch: {meta['pswitch_version']} (git {meta['git_commit']})")
+    L.append(f"- pswitch: {meta['pswitch_version']} "
+             f"({meta.get('pswitch_impl', 'python')}, git {meta['git_commit']})")
     L.append(f"- 结果目录: `{env.root}`")
     L.append("")
     L.append("所有 pswitch 实例都使用临时 `PSWITCH_HOME`，"
@@ -1411,6 +1424,14 @@ def git_commit():
 
 
 def pswitch_version():
+    if PSWITCH_BIN:
+        try:
+            out = subprocess.run(
+                [pswitch_cmd()[0], "version"],
+                capture_output=True, text=True, timeout=10).stdout.strip()
+            return out.replace("pswitch ", "") or "-"
+        except Exception:
+            return "-"
     try:
         text = (SRC / "pswitch" / "__init__.py").read_text(encoding="utf-8")
         m = re.search(r'__version__\s*=\s*"([^"]+)"', text)
@@ -1434,6 +1455,9 @@ def main(argv=None):
         "python": platform.python_version(),
         "cpu_count": os.cpu_count(),
         "pswitch_version": pswitch_version(),
+        "pswitch_impl": "go" if PSWITCH_BIN else "python",
+        "pswitch_binary": (str(Path(PSWITCH_BIN).expanduser().resolve())
+                           if PSWITCH_BIN else None),
         "git_commit": git_commit(),
         "argv": sys.argv[1:],
         "ports": {

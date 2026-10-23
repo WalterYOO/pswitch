@@ -153,6 +153,19 @@ GUI 应用也一起生效。恢复直连或换回原来的代理：`pswitch syst
   origin-form 并强制 `Connection: close`）和无认证 SOCKS5 CONNECT；BIND / UDP ASSOCIATE
   和 SOCKS4 不支持，会明确拒绝。
 
+## Go 实现
+
+`go/` 下有一份功能完全对齐的 Go 重写，面向高吞吐、低延迟场景：
+
+```bash
+cd go
+go build -o bin/pswitch ./cmd/pswitch
+./bin/pswitch version
+```
+
+配置目录、`state.json`、PID、日志格式和全部 CLI 命令都与 Python 版一致，
+可直接替换二进制。设计说明与同机基准对比见 [go/README.md](go/README.md)。
+
 ## 性能测试
 
 `bench/` 下有一套可重复的延迟与转发吞吐基准。
@@ -161,6 +174,9 @@ GUI 应用也一起生效。恢复直连或换回原来的代理：`pswitch syst
 
 ```bash
 python bench/bench.py all
+
+# 测 Go 版
+PSWITCH_BIN=$PWD/go/bin/pswitch python3 bench/bench.py all
 ```
 
 结果写入 `bench/results/<时间戳>/SUMMARY.md`。

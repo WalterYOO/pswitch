@@ -19,6 +19,21 @@ bench/results/<YYYYMMDD-HHMMSS>/SUMMARY.md
 结果目录里有 `meta.json`、各用例 JSON、`SUMMARY.md` 和每个测试实例的配置/日志。
 每次运行都会新建目录，不会覆盖历史结果。
 
+## 测另一份实现（Go 版）
+
+`PSWITCH_BIN` 可以把被测对象换成任意兼容的可执行文件，用例、端口、统计口径完全不变：
+
+```bash
+# 先构建 Go 版
+(cd go && go build -o bin/pswitch ./cmd/pswitch)
+
+# 用同一套基准测 Go 版
+PSWITCH_BIN=$PWD/go/bin/pswitch python3 bench/bench.py all
+```
+
+不设置该变量时仍测仓库里的 Python 版。`meta.json` 会记录
+`pswitch_impl`（`python` / `go`）与 `pswitch_binary`，方便区分结果来源。
+
 ## 隔离保证
 
 - 每个 pswitch 实例使用独立的临时 `PSWITCH_HOME`，监听 `171xx` 端口；
