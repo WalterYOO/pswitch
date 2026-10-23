@@ -155,7 +155,7 @@ GUI 应用也一起生效。恢复直连或换回原来的代理：`pswitch syst
 
 ## 性能测试
 
-`bench/` 下有一套可重复的延迟基准（只测延迟，不含吞吐上限）。
+`bench/` 下有一套可重复的延迟与转发吞吐基准。
 每次运行使用独立的临时 `PSWITCH_HOME` 和 171xx 端口，
 不会影响正在运行的 `127.0.0.1:17000`：
 
@@ -164,7 +164,9 @@ python bench/bench.py all
 ```
 
 结果写入 `bench/results/<时间戳>/SUMMARY.md`。
-测量口径见 [bench/PLAN.md](bench/PLAN.md)，用法与基线结果见 [bench/README.md](bench/README.md)。
+测量口径见 [bench/PLAN.md](bench/PLAN.md)（延迟）与
+[bench/THROUGHPUT-PLAN.md](bench/THROUGHPUT-PLAN.md)（吞吐），
+用法与基线结果见 [bench/README.md](bench/README.md)。
 
 ## 注意事项
 

@@ -6,6 +6,7 @@
 raw（默认）——按客户端发来的首字节分流，给微基准和加载测试用：
     E + payload   原样回显 payload（测 RTT）
     S + stream    读走并丢弃（制造背景负载）
+    D            持续下发 64 KiB 块，直到客户端断开（测下行吞吐）
     G/H ...       回一个 HTTP 204 后关闭（给 pswitch 健康探活用）
 
 http——最小 keep-alive HTTP 服务，给 ab / 手工宏基准用：
@@ -48,6 +49,11 @@ async def handle_raw(reader, writer):
         elif first == b"S":
             while await reader.read(65536):
                 pass
+        elif first == b"D":
+            chunk = b"\x00" * 65536
+            while True:
+                writer.write(chunk)
+                await writer.drain()
         # 其它首字节：不认识，直接断开
     except (ConnectionError, asyncio.IncompleteReadError, asyncio.LimitOverrunError):
         pass

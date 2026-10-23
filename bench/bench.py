@@ -325,11 +325,14 @@ class Env:
         self.http_forward_port = 17103 + off
         self.e2e_port = 17104 + off
         self.failover_port = 17105 + off
+        self.throughput_port = 17106 + off
+        self.iperf_port = 18082 + off
         self.procs = []
         self.instances = {}
         self.targets = {}
         self.core_started = False
         self.http_started = False
+        self.throughput_started = False
 
     # -- 生命周期 --------------------------------------------------------
     def _register(self, proc):
@@ -395,6 +398,40 @@ class Env:
             active="http",
             probe_url=f"http://127.0.0.1:{self.http_port}/")
         self.http_started = True
+
+    def start_throughput(self, generator):
+        if self.throughput_started:
+            return
+        if not port_free(self.throughput_port):
+            raise SystemExit(
+                f"端口 {self.throughput_port} 被占用，换一组端口: --offset 100")
+        if generator == "iperf3":
+            iperf = shutil.which("iperf3")
+            if not iperf:
+                raise RuntimeError("找不到 iperf3")
+            if not port_free(self.iperf_port):
+                raise SystemExit(
+                    f"端口 {self.iperf_port} 被占用，换一组端口: --offset 100")
+            server = Proc(
+                "iperf-server",
+                [iperf, "-s", "-p", str(self.iperf_port)],
+                env=clean_env(),
+                log_path=self.root / "env" / "iperf-server" / "stdout.log")
+            self._register(server).start()
+            time.sleep(0.5)
+            if server.p.poll() is not None:
+                raise RuntimeError("iperf3 server 启动失败")
+            upstream = f"127.0.0.1:{self.iperf_port}"
+            probe_url = f"http://127.0.0.1:{self.iperf_port}/"
+        else:
+            self.ensure_target("raw-target", self.raw_port, "raw")
+            upstream = f"127.0.0.1:{self.raw_port}"
+            probe_url = f"http://127.0.0.1:{self.raw_port}/"
+        self.start_instance(
+            "throughput", self.throughput_port, "manual",
+            upstreams=[("sink", upstream)], active="sink",
+            probe_url=probe_url)
+        self.throughput_started = True
 
     def cleanup(self):
         for proc in reversed(self.procs):
@@ -652,6 +689,186 @@ def run_loaded(env, args):
     return {
         "levels": results,
         "concurrency": run_concurrent(env, args),
+    }
+
+
+# --------------------------------------------------------------------------
+# 转发吞吐：iperf3（首选）与内置 Python 生成器（回退）
+# --------------------------------------------------------------------------
+
+def download_worker(port, stop, counter):
+    try:
+        s = open_conn(port, timeout=10)
+        s.sendall(b"D")
+        while not stop.is_set():
+            data = s.recv(65536)
+            if not data:
+                break
+            counter[0] += len(data)
+        s.close()
+    except OSError:
+        pass
+
+
+def _iperf_throughput(data, direction):
+    end = data.get("end") or {}
+    recv = (end.get("sum_received") or {}).get("bits_per_second")
+    rev = (end.get("sum_received_bidir_reverse") or {}).get("bits_per_second")
+    if direction == "bidir":
+        if recv is None and rev is None:
+            return None
+        return ((recv or 0) + (rev or 0)) / 1e9
+    return recv / 1e9 if recv is not None else None
+
+
+def iperf_run(binary, port, direction, streams, args):
+    cmd = [binary, "-c", "127.0.0.1", "-p", str(port),
+           "-t", str(int(args.throughput_duration)),
+           "-O", str(int(args.throughput_omit)),
+           "-P", str(streams), "-w", args.throughput_window, "-J"]
+    if direction == "recv":
+        cmd.append("-R")
+    elif direction == "bidir":
+        cmd.append("--bidir")
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=args.throughput_duration + 60)
+    except subprocess.TimeoutExpired:
+        return {"error": "iperf3 超时"}
+    if p.returncode != 0:
+        return {"error": (p.stderr or p.stdout).strip()[:300]}
+    try:
+        data = json.loads(p.stdout)
+    except json.JSONDecodeError:
+        return {"error": "iperf3 输出不是 JSON", "raw": p.stdout[-500:]}
+    end = data.get("end") or {}
+    sent = end.get("sum_sent") or {}
+    recv = end.get("sum_received") or {}
+    rev = end.get("sum_received_bidir_reverse") or {}
+    return {
+        "gbps": _iperf_throughput(data, direction),
+        "recv_gbps": (recv.get("bits_per_second") or 0) / 1e9 or None,
+        "rev_gbps": ((rev.get("bits_per_second") or 0) / 1e9
+                     if direction == "bidir" else None),
+        "retransmits": sent.get("retransmits", recv.get("retransmits")),
+        "cpu_host_pct": (end.get("cpu_utilization_percent") or {}).get("host_total"),
+        "cpu_remote_pct": (end.get("cpu_utilization_percent") or {}).get("remote_total"),
+    }
+
+
+def python_arm(port, direction, streams, duration):
+    stop = threading.Event()
+    parts = streams * (2 if direction == "bidir" else 1)
+    counters = [[0] for _ in range(parts)]
+    threads = []
+    idx = 0
+    if direction in ("send", "bidir"):
+        for _ in range(streams):
+            threads.append(threading.Thread(
+                target=bulk_worker, args=(port, stop, counters[idx]),
+                daemon=True))
+            idx += 1
+    if direction in ("recv", "bidir"):
+        for _ in range(streams):
+            threads.append(threading.Thread(
+                target=download_worker, args=(port, stop, counters[idx]),
+                daemon=True))
+            idx += 1
+    t0 = time.monotonic()
+    for t in threads:
+        t.start()
+    time.sleep(duration)
+    stop.set()
+    for t in threads:
+        t.join(timeout=5)
+    elapsed = time.monotonic() - t0
+    total = sum(c[0] for c in counters)
+    return {"gbps": total * 8 / elapsed / 1e9 if elapsed > 0 else None}
+
+
+def run_throughput(env, args):
+    iperf = shutil.which("iperf3")
+    generator = "iperf3" if (
+        args.throughput_generator in ("auto", "iperf3") and iperf) else "python"
+    try:
+        env.start_throughput(generator)
+    except Exception as e:
+        if generator == "iperf3":
+            print(f"[throughput] iperf3 不可用，回退 Python: {e}")
+            generator = "python"
+            env.start_throughput(generator)
+        else:
+            raise
+
+    pid = env.instances["throughput"].p.pid
+    baseline_port = (env.iperf_port if generator == "iperf3"
+                     else env.raw_port)
+    cases = []
+    for direction in args.throughput_directions:
+        for streams in args.throughput_streams:
+            rounds = []
+            for r in range(args.throughput_rounds):
+                order = (("baseline", "pswitch") if r % 2 == 0
+                         else ("pswitch", "baseline"))
+                detail = {}
+                for arm in order:
+                    port = (baseline_port if arm == "baseline"
+                            else env.throughput_port)
+                    cpu0 = cpu_time(pid) if arm == "pswitch" else None
+                    t0 = time.monotonic()
+                    if generator == "iperf3":
+                        res = iperf_run(iperf, port, direction, streams, args)
+                    else:
+                        res = python_arm(port, direction, streams,
+                                         args.throughput_duration)
+                    elapsed = time.monotonic() - t0
+                    cpu1 = cpu_time(pid) if arm == "pswitch" else None
+                    if (arm == "pswitch" and cpu0 is not None
+                            and cpu1 is not None and elapsed > 0):
+                        res["cpu_pct"] = (cpu1 - cpu0) / elapsed * 100.0
+                    detail[arm] = res
+                rounds.append(detail)
+
+            def med(arm, field):
+                vals = [x[arm].get(field) for x in rounds
+                        if x.get(arm) and isinstance(x[arm].get(field), (int, float))]
+                return statistics.median(vals) if vals else None
+
+            base_gbps = med("baseline", "gbps")
+            ps_gbps = med("pswitch", "gbps")
+            ps_cpu = med("pswitch", "cpu_pct")
+            case = {
+                "direction": direction,
+                "streams": streams,
+                "baseline": {"gbps": base_gbps},
+                "pswitch": {
+                    "gbps": ps_gbps,
+                    "cpu_pct": ps_cpu,
+                    "gbps_per_core": (ps_gbps / (ps_cpu / 100.0)
+                                      if ps_gbps and ps_cpu else None),
+                },
+                "retention": (ps_gbps / base_gbps
+                              if ps_gbps is not None and base_gbps else None),
+                "rounds": rounds,
+            }
+            cases.append(case)
+            retention_pct = (case["retention"] * 100
+                             if case["retention"] is not None else None)
+            print(f"[throughput] {direction} P={streams} "
+                  f"baseline={fmt(base_gbps, 2)} Gbps "
+                  f"pswitch={fmt(ps_gbps, 2)} Gbps "
+                  f"retention={fmt(retention_pct, 0)}% "
+                  f"cpu={fmt(ps_cpu, 0)}%")
+    return {
+        "plan_version": "v1",
+        "generator": generator,
+        "params": {
+            "duration_s": args.throughput_duration,
+            "omit_s": args.throughput_omit,
+            "rounds": args.throughput_rounds,
+            "window": args.throughput_window,
+        },
+        "cases": cases,
     }
 
 
@@ -975,6 +1192,52 @@ def build_summary(env, args, meta, results):
                     f"| {len(level['errors'])} |")
             L.append("")
 
+    thr = results.get("throughput")
+    if thr:
+        L.append("## 转发吞吐")
+        L.append("")
+        L.append(f"- 生成器: `{thr['generator']}`")
+        if thr["generator"] == "python":
+            L.append("- Python 生成器与 pswitch 同机争 CPU，绝对值偏低；"
+                     "只看同一行里 baseline 与 pswitch 的相对关系。")
+        L.append("")
+        L.append("| 方向 | 流数 | 基线 Gbps | pswitch Gbps | 保持率 "
+                 "| pswitch CPU | Gbps/核 |")
+        L.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: |")
+        for case in thr["cases"]:
+            b = case["baseline"].get("gbps")
+            p = case["pswitch"].get("gbps")
+            r = case["retention"]
+            cpu = case["pswitch"].get("cpu_pct")
+            per = case["pswitch"].get("gbps_per_core")
+            L.append(
+                f"| {case['direction']} | {case['streams']} "
+                f"| {fmt(b, 2)} | {fmt(p, 2)} "
+                f"| {fmt(r * 100 if r is not None else None, 0)}% "
+                f"| {fmt(cpu, 0)}% | {fmt(per, 1)} |")
+        L.append("")
+        L.append("> 基线是内核 loopback（单流可达 100+ Gbps），pswitch 是单核用户态代理"
+                 "（约 30–40 Gbps）；单流保持率只作参考，不作为判定项。"
+                 "四流基线反而下降是 iperf3 自身的多流开销，"
+                 "不能直接和单流基线比较。")
+        L.append("")
+        if thr["generator"] == "iperf3":
+            def send_case(n):
+                return next((c for c in thr["cases"]
+                             if c["direction"] == "send"
+                             and c["streams"] == n), None)
+
+            one, four = send_case(1), send_case(4)
+            if one and one["pswitch"].get("gbps") is not None:
+                gbps = one["pswitch"]["gbps"]
+                verdicts.append(("单流 send >= 10 Gbps", gbps >= 10,
+                                 f"{fmt(gbps, 2)} Gbps"))
+            if four and four["pswitch"].get("gbps") is not None:
+                gbps = four["pswitch"]["gbps"]
+                verdicts.append(("四流 send >= 20 Gbps", gbps >= 20,
+                                 f"{fmt(gbps, 2)} Gbps"))
+        L.append("")
+
     macro = results.get("macro")
     if macro and "cases" in macro:
         L.append("## 宏基准（ab -k，keep-alive）")
@@ -1076,8 +1339,8 @@ def parse_list(text, cast=int):
 def parse_args(argv=None):
     p = argparse.ArgumentParser(
         description="pswitch 统一延迟基准（独立实例，不碰生产 17000）")
-    p.add_argument("mode", choices=["micro", "loaded", "macro",
-                                    "failover", "e2e", "all"])
+    p.add_argument("mode", choices=["micro", "loaded", "throughput",
+                                    "macro", "failover", "e2e", "all"])
     p.add_argument("--out", help="结果目录（默认 bench/results/<时间戳>）")
     p.add_argument("--offset", type=int, default=0,
                    help="所有测试端口统一加偏移，端口冲突时用（如 100）")
@@ -1099,6 +1362,21 @@ def parse_args(argv=None):
                    help="并发 RTT 测试的连接数列表")
     p.add_argument("--concurrent-requests", type=int, default=300,
                    help="并发 RTT 测试每条连接的请求数")
+    p.add_argument("--throughput-generator", choices=["auto", "iperf3", "python"],
+                   default="auto", help="吞吐测试的负载生成器")
+    p.add_argument("--throughput-directions", type=lambda s: parse_list(s, str),
+                   default=["send", "recv"],
+                   help="逗号分隔的方向: send,recv,bidir")
+    p.add_argument("--throughput-streams", type=parse_list, default=[1, 4],
+                   help="并行流数量列表")
+    p.add_argument("--throughput-rounds", type=int, default=2,
+                   help="每个吞吐组合的轮数")
+    p.add_argument("--throughput-duration", type=float, default=6.0,
+                   help="iperf3 单轮时长秒数")
+    p.add_argument("--throughput-omit", type=float, default=2.0,
+                   help="iperf3 丢弃的预热秒数")
+    p.add_argument("--throughput-window", default="1M",
+                   help="iperf3 socket 窗口")
     p.add_argument("--requests", type=int, default=10000,
                    help="ab 每轮请求数")
     p.add_argument("--concurrency", type=parse_list, default=[1, 64],
@@ -1180,6 +1458,9 @@ def main(argv=None):
         if args.mode in ("loaded", "all"):
             results["loaded"] = run_loaded(env, args)
             env.save("loaded", results["loaded"])
+        if args.mode in ("throughput", "all"):
+            results["throughput"] = run_throughput(env, args)
+            env.save("throughput", results["throughput"])
         if args.mode in ("macro", "all"):
             results["macro"] = run_macro(env, args)
             env.save("macro", results["macro"])

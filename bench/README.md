@@ -1,7 +1,8 @@
 # pswitch 延迟基准
 
-这套脚本按 [`PLAN.md`](PLAN.md) 的口径测量 pswitch 的延迟，结果可跨次运行对比。
-它只测**延迟**，不测吞吐上限（吞吐另有基准）。
+这套脚本按 [`PLAN.md`](PLAN.md)（延迟）和
+[`THROUGHPUT-PLAN.md`](THROUGHPUT-PLAN.md)（转发吞吐）的口径测量 pswitch，
+结果可跨次运行对比。
 
 ## 一条命令
 
@@ -34,10 +35,11 @@ bench/results/<YYYYMMDD-HHMMSS>/SUMMARY.md
 | --- | --- | --- |
 | `python bench/bench.py micro` | L1 稳态 RTT + L2 新建连接延迟，四条拓扑 | ~30 s |
 | `python bench/bench.py loaded` | L3 背景灌包下的探测延迟 + 并发 RTT | ~35 s |
+| `python bench/bench.py throughput` | T1–T4 单流/多流/双向转发吞吐与 CPU 效率 | ~100 s |
 | `python bench/bench.py macro` | ab keep-alive 吞吐与并发（毫秒精度） | ~10 s |
 | `python bench/bench.py failover` | L4 上游拒绝/黑洞/全挂时的停顿 | ~10 s |
 | `python bench/bench.py e2e --upstream HOST:PORT` | 真实上游的配对差值 | 取决于网络 |
-| `python bench/bench.py all` | 前四项；带 `--upstream` 时再加 e2e | ~90 s |
+| `python bench/bench.py all` | 前五项；带 `--upstream` 时再加 e2e | ~3 min |
 
 常用参数：
 
@@ -47,6 +49,12 @@ python bench/bench.py micro --rounds 5 --samples 2000
 
 # 更高并发，找出排队拐点
 python bench/bench.py loaded --concurrent 1,8,32,128 --duration 10
+
+# 转发吞吐：iperf3 优先，缺失时自动回退 Python 生成器
+python bench/bench.py throughput
+python bench/bench.py throughput --throughput-directions send,recv,bidir \
+    --throughput-streams 1,4,8
+python bench/bench.py throughput --throughput-generator python --throughput-duration 3
 
 # 更高压力下的 HTTP 吞吐
 python bench/bench.py macro --requests 20000 --concurrency 1,64,256
@@ -110,6 +118,23 @@ T3  client ──▶ pswitch(direct):17101 ───▶ target:18080
 并发 64 是明显的拐点：单线程事件循环饱和，吞吐回落、p99 上到毫秒级。
 这是排队，不是丢包或错误（错误数为 0）。
 
+### 转发吞吐（iperf3）
+
+| 方向 | 流数 | 直连基线 Gbps | 经 pswitch Gbps | 保持率 | pswitch CPU | Gbps/核 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| send | 1 | 133.79 | 29.94 | 22% | 83% | 35.9 |
+| send | 4 | 51.18 | 39.91 | 78% | 99% | 40.1 |
+| recv | 1 | 147.51 | 32.45 | 22% | 82% | 39.5 |
+| recv | 4 | 51.56 | 35.87 | 70% | 96% | 37.4 |
+
+解读：
+
+- pswitch 单流约 **30 Gbps**，四流约 **36–40 Gbps**，此时单核已接近 100%。
+- 基线是内核 loopback（单流 130–148 Gbps），所以单流保持率只有约 22%；
+  这不是判定项。对 1–10 Gbps 的网络，pswitch 仍有充足余量。
+- 四流基线反而降到 51 Gbps，是 iperf3 自身多流开销，不能与单流基线直接比较。
+- 如果要突破 40 Gbps，优先做多进程 + `SO_REUSEPORT`，而不是直接换语言。
+
 ### 宏基准（ab -k，HTTP keep-alive）
 
 | 并发 | 直连目标 | 经 pswitch |
@@ -140,7 +165,8 @@ ab 的分位数只有 1 ms 精度，本地结果全是 `0.00`，所以这张表�
   失败样本不参与差值统计。
 - **可重复性验收**：连续跑两次 `all`，同一指标 p50 差异应在 20% 以内。
   本次两次运行的 T1 1 B p50 为 3.2 / 3.3 µs，新建连接为 318 / 315 µs，
-  背景吞吐为 30.25 / 30.43 Gbps，均在 20% 内。
+  背景吞吐为 30.25 / 30.43 Gbps，均在 20% 内；
+  吞吐测试两次单流 send 为 29.94 / 29.64 Gbps，四流 send 为 39.91 / 38.38 Gbps。
 
 ### 两个容易误读的点
 
@@ -152,6 +178,7 @@ ab 的分位数只有 1 ms 精度，本地结果全是 `0.00`，所以这张表�
 ## 依赖
 
 - Python ≥ 3.9，只用标准库。
+- `iperf3` 用于转发吞吐（首选）；缺失时自动回退到内置 Python 生成器。
 - `ab`（macOS 自带）用于宏基准；缺失时自动跳过。
 - `curl` 用于 e2e；缺失时自动跳过。
 - 黑洞测试默认连 `10.255.255.1:17090`；不同网络下行为可能不同，
