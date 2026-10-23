@@ -57,6 +57,7 @@ pswitch start
 pswitch status          # 当前走哪个、各上游实时探活
 pswitch use office      # 固定走某一个
 pswitch use auto        # 自动：按优先级顺序选第一个真正能通的（推荐）
+pswitch use direct      # 全部直连：不经过任何上游
 pswitch priority        # 查看优先级顺序
 pswitch priority office 1   # 把 office 提到最高优先级
 pswitch list            # 列出全部上游
@@ -72,7 +73,7 @@ pswitch enable office   # 恢复
 | --- | --- |
 | `start` / `stop` / `restart` | 管理守护进程 |
 | `status` | 进程、监听、当前上游、各上游实时探活结果 |
-| `use <名字\|auto>` | 切换上游（auto = 自动选择） |
+| `use <名字\|auto\|direct>` | 切换出口（auto = 自动选择；direct = 不经上游直接连目标） |
 | `list` / `add <名> <host:port>` / `remove <名>` | 管理上游列表 |
 | `enable <名>` / `disable <名>` | 临时启用/禁用某个上游：配置保留，禁用后不参与 `use`、auto 选路和故障转移 |
 | `priority [<名> [位置]]` | 查看优先级顺序；给出名字和位置则把该上游移到该位置（1 = 最高） |
@@ -103,6 +104,9 @@ pswitch enable office   # 恢复
 - 直接编辑也没关系，守护进程会检测到文件变化并自动重载。
 - 改 `listen` 需要 `pswitch restart` 才生效。
 - `mode: auto` 时按 `upstreams` 顺序取第一个探活通过的；`mode: manual` 时固定 `active`。
+- `mode: direct` 时完全不使用上游：pswitch 自己解析 HTTP CONNECT / 普通 HTTP / SOCKS5，
+  直接连接目标。此时没有配置上游也能 `pswitch start`，`use direct` 与 `use auto|名字`
+  可随时互切，客户端的环境变量和系统代理指向都不用改。
 - **`upstreams` 的数组顺序就是优先级**：先比探活等级（HTTP 通 > 只通 TCP），同级按顺序取第一个，
   不看延迟。`pswitch add` 追加到末尾（最低），`pswitch priority <名> <位置>` 调整，
   `list` / `priority` 里的编号就是选路顺序。
@@ -134,6 +138,9 @@ GUI 应用也一起生效。恢复直连或换回原来的代理：`pswitch syst
 - 每 `health_check_interval` 秒对每个上游做一次真实 HTTP 探活；只通 TCP 但转发失败
   （例如返回 502）的上游会被标记为 `TCP only`，自动选路时排在后面。
 - 当前上游临时连不上时，单条连接会自动借用其它可用上游。
+- direct 模式下 pswitch 自己充当代理：支持 HTTP CONNECT、普通 HTTP（首个请求改写为
+  origin-form 并强制 `Connection: close`）和无认证 SOCKS5 CONNECT；BIND / UDP ASSOCIATE
+  和 SOCKS4 不支持，会明确拒绝。
 
 ## 注意事项
 

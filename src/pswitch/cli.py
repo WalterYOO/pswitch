@@ -94,10 +94,11 @@ def pid_alive(pid):
 
 def cmd_start(args):
     cfg = load_config()
-    if not require_upstreams(cfg, "启动"):
-        return 1
-    if not require_enabled_upstreams(cfg, "启动"):
-        return 1
+    if cfg.get("mode") != "direct":
+        if not require_upstreams(cfg, "启动"):
+            return 1
+        if not require_enabled_upstreams(cfg, "启动"):
+            return 1
     pid = daemon_running()
     if pid:
         print(f"已经在运行 (pid {pid})")
@@ -176,32 +177,43 @@ def cmd_status(args):
         print("  守护进程  未运行  → pswitch start")
     print(f"  监听      {cfg['listen']}  {'可连接' if listening else '不可连接'}")
 
+    mode = cfg.get("mode")
+    direct = mode == "direct"
+
     if not has_upstreams(cfg):
+        if direct:
+            print("  模式      direct 全部直连")
+            print("  当前出口  direct（直接连接目标，不使用上游）")
         print("  上游      未配置  → pswitch add <名字> <host:port>")
         return 0
 
     enabled = enabled_upstreams(cfg)
     probes = _live_probe(cfg)
     health = {u["name"]: h for u, h in zip(enabled, probes)}
-    mode = cfg.get("mode")
-    interval = max(2, int(cfg.get("health_check_interval", 10) or 10))
-    fresh = pid and (time.time() - st.get("updated", 0)) < max(15, 3 * interval)
-    # 守护进程的 active 若指向刚被禁用的上游，就不算新鲜
-    if fresh and st.get("mode") == mode and st.get("active") in health:
-        active = st.get("active")
-    elif mode == "manual" and cfg.get("active") in health:
-        active = cfg["active"]
-    else:
-        active = _auto_pick(enabled, probes)
 
-    print(f"  模式      {'manual 固定' if mode == 'manual' else 'auto 自动选择'}")
-    if not enabled:
-        print("  当前上游  -（所有上游都已禁用）")
+    if direct:
+        print("  模式      direct 全部直连")
+        print("  当前出口  direct（直接连接目标，不使用上游）")
+        active = None
     else:
-        print(f"  当前上游  {active or '-'}")
-        manual_target = cfg.get("active")
-        if mode == "manual" and manual_target and manual_target not in health:
-            print(f"  说明      manual 目标 {manual_target} 已禁用或不存在，按 auto 顺序选择")
+        interval = max(2, int(cfg.get("health_check_interval", 10) or 10))
+        fresh = pid and (time.time() - st.get("updated", 0)) < max(15, 3 * interval)
+        # 守护进程的 active 若指向刚被禁用的上游，就不算新鲜
+        if fresh and st.get("mode") == mode and st.get("active") in health:
+            active = st.get("active")
+        elif mode == "manual" and cfg.get("active") in health:
+            active = cfg["active"]
+        else:
+            active = _auto_pick(enabled, probes)
+
+        print(f"  模式      {'manual 固定' if mode == 'manual' else 'auto 自动选择'}")
+        if not enabled:
+            print("  当前上游  -（所有上游都已禁用）")
+        else:
+            print(f"  当前上游  {active or '-'}")
+            manual_target = cfg.get("active")
+            if mode == "manual" and manual_target and manual_target not in health:
+                print(f"  说明      manual 目标 {manual_target} 已禁用或不存在，按 auto 顺序选择")
     print("  上游列表")
     for u in cfg["upstreams"]:
         mark = "*" if u["name"] == active else " "
@@ -221,10 +233,16 @@ def cmd_status(args):
 
 def cmd_use(args):
     cfg = load_config()
+    key = args.target
+    if key == "direct":
+        cfg["mode"] = "direct"
+        save_config(cfg)
+        signal_daemon(signal.SIGHUP)
+        print("已切换为 direct：所有请求直接连目标，不经过任何上游")
+        return 0
     if not has_upstreams(cfg):
         print("还没有配置任何上游。先 pswitch add <名字> <host:port>")
         return 1
-    key = args.target
     if key == "auto":
         cfg["mode"] = "auto"
         save_config(cfg)
@@ -234,7 +252,7 @@ def cmd_use(args):
     u = find_upstream(cfg, key)
     if not u:
         names = ", ".join(x["name"] for x in enabled_upstreams(cfg)) or "无（都被禁用了）"
-        print(f"没有这个上游: {key}\n可选: {names}, 或 auto")
+        print(f"没有这个上游: {key}\n可选: {names}, auto, direct")
         return 1
     if not u["enabled"]:
         print(f"{u['name']} 已被禁用，先 pswitch enable {u['name']}")
@@ -354,7 +372,10 @@ def _set_enabled(args, enabled):
         return 0
     print(f"已禁用: {u['name']} -> {u['addr']}（配置保留，不参与 use / auto / 故障转移）")
     if not enabled_upstreams(cfg):
-        print("警告：所有上游都已禁用，转发会全部失败。启用一个: pswitch enable <名字>")
+        if cfg.get("mode") == "direct":
+            print("警告：所有上游都已禁用；direct 模式不受影响，切回 auto/manual 前需启用一个。")
+        else:
+            print("警告：所有上游都已禁用，转发会全部失败。启用一个: pswitch enable <名字>")
     elif cfg.get("mode") == "manual" and cfg.get("active") == u["name"]:
         print("注意：它正是当前 manual 固定的上游，守护进程会暂时改用其它可用上游。")
     return 0
@@ -392,7 +413,7 @@ def cmd_env(args):
 
 def cmd_test(args):
     cfg = load_config()
-    if not require_upstreams(cfg, "测试"):
+    if cfg.get("mode") != "direct" and not require_upstreams(cfg, "测试"):
         return 1
     host, port = split_hostport(cfg["listen"])
     proxy = f"http://{host}:{port}"
@@ -428,10 +449,11 @@ def cmd_logs(args):
 
 def cmd_install(args):
     cfg = load_config()
-    if not require_upstreams(cfg, "安装开机自启"):
-        return 1
-    if not require_enabled_upstreams(cfg, "安装开机自启"):
-        return 1
+    if cfg.get("mode") != "direct":
+        if not require_upstreams(cfg, "安装开机自启"):
+            return 1
+        if not require_enabled_upstreams(cfg, "安装开机自启"):
+            return 1
     if sys.platform != "darwin":
         print("仅支持 macOS 的 launchd")
         return 1
@@ -498,12 +520,13 @@ def active_network_service():
 
 def cmd_system(args):
     cfg = load_config()
-    if not require_upstreams(cfg, "修改系统代理"):
+    if cfg.get("mode") != "direct" and not require_upstreams(cfg, "修改系统代理"):
         return 1
     if args.action == "on" and not daemon_running():
         print("守护进程未运行，先 pswitch start 或 pswitch install")
         return 1
-    if args.action == "on" and not require_enabled_upstreams(cfg, "开启系统代理"):
+    if (args.action == "on" and cfg.get("mode") != "direct"
+            and not require_enabled_upstreams(cfg, "开启系统代理")):
         return 1
     svc = active_network_service()
     if not svc:
@@ -564,7 +587,7 @@ def build_parser():
     sub.add_parser("install", help="安装为 launchd 开机自启")
     sub.add_parser("uninstall", help="卸载开机自启")
 
-    u = sub.add_parser("use", help="切换上游：use <名字> | use auto")
+    u = sub.add_parser("use", help="切换出口：use <名字> | use auto | use direct")
     u.add_argument("target")
 
     a = sub.add_parser("add", help="添加上游")

@@ -17,7 +17,9 @@ LOG_PATH = HOME / "pswitch.log"
 # use / auto 选路（用 `pswitch enable|disable <名字>` 切换）。
 DEFAULT_CONFIG = {
     "listen": "127.0.0.1:17000",
-    "mode": "auto",                       # auto = 按顺序取第一个可用的；manual = 固定 active
+    # auto = 按顺序取第一个可用的；manual = 固定 active；
+    # direct = 不经任何上游，直接把请求连到目标
+    "mode": "auto",
     "active": None,
     "health_check_interval": 10,          # 秒
     "connect_timeout": 3,                 # 连接上游超时（秒）

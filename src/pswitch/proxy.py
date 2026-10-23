@@ -22,6 +22,8 @@ from .config import (
     split_hostport,
     write_json,
 )
+from .direct import handle_direct
+from .stream import pipe as _pipe
 
 log = logging.getLogger("pswitch")
 
@@ -130,28 +132,12 @@ async def probe_full(addr, url, timeout=3.0):
 # 转发
 # --------------------------------------------------------------------------
 
-async def _pipe(reader, writer):
-    try:
-        while True:
-            data = await reader.read(65536)
-            if not data:
-                break
-            writer.write(data)
-            await writer.drain()
-    except (ConnectionError, asyncio.CancelledError):
-        pass
-    finally:
-        try:
-            writer.close()
-        except Exception:
-            pass
-
-
 class ProxyServer:
     def __init__(self, cfg):
         self.cfg = cfg
         self.health = {}
         self.active_upstream = None
+        self._probe_task = None
         self._stop = asyncio.Event()
         self._config_mtime = self._mtime()
 
@@ -175,11 +161,18 @@ class ProxyServer:
         self.cfg = new
         self._config_mtime = self._mtime()
         log.info("配置已重载: mode=%s active=%s", new["mode"], new.get("active"))
-        self._recompute()
-        self._write_state()
+        if new.get("mode") != "direct" and not self.health:
+            # 从 direct 切回 auto/manual 时没有健康数据，先探活再选路
+            self._probe_task = asyncio.create_task(self._check_all())
+        else:
+            self._recompute()
+            self._write_state()
 
     # -- 选路 ------------------------------------------------------------
     def _pick(self):
+        # direct 模式不选上游
+        if self.cfg.get("mode") == "direct":
+            return None
         # 被 disable 的上游完全不参与选路（manual 指向它时也自动落回 auto 顺序）
         ups = enabled_upstreams(self.cfg)
         if not ups:
@@ -196,6 +189,11 @@ class ProxyServer:
         return ups[0]
 
     def _recompute(self):
+        if self.cfg.get("mode") == "direct":
+            if self.active_upstream:
+                log.info("当前模式: direct（不走任何上游，全部直连）")
+            self.active_upstream = None
+            return
         old = (self.active_upstream or {}).get("name")
         self.active_upstream = self._pick()
         new = (self.active_upstream or {}).get("name")
@@ -213,6 +211,12 @@ class ProxyServer:
             return 10
 
     async def _check_all(self):
+        if self.cfg.get("mode") == "direct":
+            # direct 模式不依赖上游，跳过探活
+            self.health = {}
+            self._recompute()
+            self._write_state()
+            return
         ups = enabled_upstreams(self.cfg)
         url = self.cfg.get("probe_url")
         timeout = self.cfg.get("probe_timeout", 3)
@@ -256,6 +260,9 @@ class ProxyServer:
     # -- 连接处理 --------------------------------------------------------
     async def handle(self, creader, cwriter):
         peer = cwriter.get_extra_info("peername")
+        if self.cfg.get("mode") == "direct":
+            await handle_direct(creader, cwriter, self.cfg, peer)
+            return
         up = self.active_upstream
         if not up:
             cwriter.close()
@@ -307,9 +314,12 @@ class ProxyServer:
         await self._check_all()
         server = await asyncio.start_server(self.handle, host, port, reuse_address=True)
         PID_PATH.write_text(str(os.getpid()))
-        log.info("pswitch 已启动，监听 %s:%s，模式 %s，当前上游 %s",
-                 host, port, self.cfg.get("mode"),
-                 (self.active_upstream or {}).get("name"))
+        if self.cfg.get("mode") == "direct":
+            log.info("pswitch 已启动，监听 %s:%s，模式 direct（全部直连）", host, port)
+        else:
+            log.info("pswitch 已启动，监听 %s:%s，模式 %s，当前上游 %s",
+                     host, port, self.cfg.get("mode"),
+                     (self.active_upstream or {}).get("name"))
         health_task = asyncio.create_task(self._health_loop())
         serve_task = asyncio.create_task(server.serve_forever())
         stop_task = asyncio.create_task(self._stop.wait())
@@ -353,7 +363,8 @@ def setup_logging(foreground=False, debug=False):
 async def _serve(foreground, debug):
     setup_logging(foreground, debug)
     cfg = load_config()
-    if not enabled_upstreams(cfg):
+    # direct 模式不依赖上游，允许零上游启动
+    if cfg.get("mode") != "direct" and not enabled_upstreams(cfg):
         if cfg.get("upstreams"):
             msg = ("所有上游都被禁用了，没有可用上游，拒绝启动。\n"
                    "先启用一个，例如: pswitch enable <名字>\n"
