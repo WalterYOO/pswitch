@@ -2,4 +2,4 @@
 package version
 
 // Version 是当前 Go 实现的版本号。
-const Version = "0.2.0"
+const Version = "0.1.6"

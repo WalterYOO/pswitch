@@ -1,0 +1,49 @@
+# Changelog
+
+本文件记录 pswitch 的显著变更。三份实现（Python / Go / Rust）共用同一版本号。
+格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
+版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
+
+0.1.5 及更早版本没有独立的变更文件，可查看 git 历史与
+[tags](https://github.com/WalterYOO/pswitch/tags)。
+
+## [0.1.6] - 2026-10-24
+
+三份实现（Python / Go / Rust）统一发布 0.1.6。
+
+### 新增
+
+- **Go 实现**（`go/`）：与 Python 版功能对齐的独立二进制，覆盖转发、
+  `auto` 选路与故障转移、`direct` 模式、上游管理、日志轮转、launchd 与
+  macOS 系统代理；面向高吞吐、低延迟场景。
+- **Rust 实现**（`rust/`）：基于 tokio 的等价实现，配置、状态、日志与
+  CLI 行为与 Python 版一致；新建连接延迟与转发吞吐明显优于 Python 版。
+- **`pswitch system use <名字|host:port>`**（三版）：把 macOS 系统代理
+  直接指向指定上游，绕过本地转发端口；禁用的上游会被拒绝，
+  `pswitch system on` 可切回本地端口。
+- **可重复基准**（`bench/`）：新增延迟（`micro` / `loaded` / `failover`）
+  与转发吞吐（`throughput`）用例，以及 `ab` 宏基准，结果写入
+  `bench/results/<时间戳>/SUMMARY.md`。
+- **`bench.py --impl python|rust|go` 与 `--binary PATH`**：同一套用例、
+  端口与统计口径可以测任意一份实现。
+- **`bench/COMPARISON.md`**：Python / Go / Rust 三实现同机横向对比数据与结论。
+
+### 变更
+
+- 三份实现的版本号统一为 0.1.6；Go 版此前自报 0.2.0。
+- 根 README 的基准入口改为 `--impl`，`PSWITCH_BIN` 环境变量被移除。
+
+### 修复
+
+- `bench.py` 生成的「复现」命令补上 `--offset` 与 `--upstream`，
+  按提示重跑不会换端口，也不会因缺少参数直接失败。
+- `bench.py` 把连接被 RST 视为快速失败，不再误判为挂住。
+
+### 文档
+
+- 根 README 增加 Go / Rust 版的构建与安装说明，以及 `system use`
+  绕过本地转发时的注意事项。
+- `go/README.md`、`rust/README.md` 补充功能对齐表、设计要点与各自基准数据。
+- `bench/README.md` 说明如何用 `--impl` / `--binary` 比较不同实现。
+
+[0.1.6]: https://github.com/WalterYOO/pswitch/releases/tag/0.1.6

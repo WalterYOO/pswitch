@@ -201,6 +201,10 @@ python bench/bench.py all --impl rust
 用法与基线结果见 [bench/README.md](bench/README.md)，
 三份实现的横向对比见 [bench/COMPARISON.md](bench/COMPARISON.md)。
 
+## 更新记录
+
+见 [CHANGELOG.md](CHANGELOG.md)。
+
 ## 注意事项
 
 - 系统代理指向本地端口后，`pswitch` 停掉就等于断网。建议先 `install` 再 `system on`。
