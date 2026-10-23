@@ -116,6 +116,8 @@ func usage() {
   logs [-n 行数]           查看最近日志
   install / uninstall      安装/卸载 launchd 开机自启
   system on|off|status     管理 macOS 系统代理
+  system use <名字|host:port>
+                           把系统代理直接指向某个上游（不经过 pswitch）
   version                  查看版本号
   serve                    前台运行转发进程（调试用）
 `)

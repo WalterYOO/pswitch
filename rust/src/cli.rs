@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::{Command as ProcessCommand, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 
 use crate::config::{self, Config, Health, Upstream};
 use crate::launchd;
@@ -76,14 +76,25 @@ enum Cmd {
         lines: usize,
     },
     /// 管理 macOS 系统代理指向
-    System { action: SystemAction },
+    System {
+        #[command(subcommand)]
+        action: SystemAction,
+    },
 }
 
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Subcommand)]
 enum SystemAction {
+    /// 把系统代理指向本地 pswitch 端口
     On,
+    /// 关闭系统代理
     Off,
+    /// 查看系统代理状态
     Status,
+    /// 直接把系统代理指向某个上游（不经过 pswitch）
+    Use {
+        /// 上游名字，或 host:port
+        target: String,
+    },
 }
 
 pub fn run() -> u8 {
@@ -862,12 +873,70 @@ fn cmd_uninstall() -> i32 {
 // macOS 系统代理
 // --------------------------------------------------------------------------
 
+/// 把 system use 的参数解析成 host:port：上游名字优先，否则按 host:port 直接使用。
+fn resolve_system_target(cfg: &Config, target: &str) -> Result<(String, u16), String> {
+    if let Some(u) = cfg.upstreams.iter().find(|u| u.name == target) {
+        if !u.enabled {
+            return Err(format!("{} 已被禁用，先 pswitch enable {}", u.name, u.name));
+        }
+        return util::split_hostport(&u.addr);
+    }
+    match util::split_hostport(target) {
+        Ok(v) => Ok(v),
+        Err(_) => {
+            let names = if cfg.upstreams.is_empty() {
+                "无".to_string()
+            } else {
+                cfg.upstreams
+                    .iter()
+                    .map(|u| u.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            Err(format!(
+                "没有这个上游也不是合法地址: {}\n可选: {}，或直接给 host:port",
+                target, names
+            ))
+        }
+    }
+}
+
+fn cmd_system_use(cfg: &Config, target: &str) -> i32 {
+    let (host, port) = match resolve_system_target(cfg, target) {
+        Ok(v) => v,
+        Err(msg) => {
+            println!("{}", msg);
+            return 1;
+        }
+    };
+    let Some(svc) = system_proxy::active_network_service() else {
+        println!("找不到当前活动的网络服务");
+        return 1;
+    };
+    for args in system_proxy::set_commands(&svc, &host, port) {
+        let _ = system_proxy::networksetup(&args);
+    }
+    if cfg.upstreams.iter().any(|u| u.name == target) {
+        println!(
+            "系统代理（{}）已直接指向上游 {} ({}:{})",
+            svc, target, host, port
+        );
+    } else {
+        println!("系统代理（{}）已直接指向 {}:{}", svc, host, port);
+    }
+    println!("注意：这不经过 pswitch，use / 故障转移都不生效；恢复本地端口: pswitch system on");
+    0
+}
+
 fn cmd_system(action: SystemAction) -> i32 {
     let cfg = config::load_config();
+    if let SystemAction::Use { target } = &action {
+        return cmd_system_use(&cfg, target);
+    }
     if !cfg.is_direct() && !require_upstreams(&cfg, "修改系统代理") {
         return 1;
     }
-    let is_on = matches!(action, SystemAction::On);
+    let is_on = matches!(&action, SystemAction::On);
     if is_on && util::daemon_running().is_none() {
         println!("守护进程未运行，先 pswitch start 或 pswitch install");
         return 1;
@@ -920,6 +989,8 @@ fn cmd_system(action: SystemAction) -> i32 {
                 println!("  {:<6}{}  {}:{}", kind, state, get("Server"), get("Port"));
             }
         }
+        // 上面已经提前返回，这里只是为了穷尽匹配
+        SystemAction::Use { .. } => {}
     }
     0
 }

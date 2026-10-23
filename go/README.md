@@ -29,6 +29,7 @@ go build -o bin/pswitch ./cmd/pswitch
 | `env/test/logs/version` | ✅ |
 | macOS launchd `install/uninstall` | ✅ |
 | macOS `system on/off/status` 系统代理 | ✅ |
+| macOS `system use <名字\|host:port>` 直连上游 | ✅ |
 | 日志按 1 MB × 3 轮转 | ✅ |
 
 行为细节与 Python 版保持一致，例如：
