@@ -88,6 +88,7 @@ pswitch system use office    # 系统代理 -> 直接指向 office 的地址（�
 pswitch system use 10.0.0.8:8080   # 也可以直接给 host:port
 pswitch disable office  # 临时不用它（如内网代理在当前网络不可达），配置保留
 pswitch enable office   # 恢复
+pswitch completion      # 安装当前 shell 的命令补全
 pswitch version         # 查看当前版本号
 ```
 
@@ -107,7 +108,30 @@ pswitch version         # 查看当前版本号
 | `install` / `uninstall` | 安装/卸载 launchd 开机自启 |
 | `system on\|off\|status` | 把 macOS 系统代理指向/取消指向本地端口 |
 | `system use <名\|host:port>` | 把系统代理直接指向某个上游（不经过 pswitch；`system on` 可切回本地端口） |
+| `completion [zsh\|bash\|fish]` | 安装 shell 补全；`--print` 只输出脚本，`--uninstall` 移除 |
 | `version`（或 `-V` / `--version`） | 查看版本号 |
+
+## Shell 补全
+
+三份实现共用同一份补全脚本，装好后 `pswitch <TAB>`、`pswitch use <TAB>`
+（自动列出当前配置里的上游名字）、`pswitch system <TAB>` 都能补全：
+
+```bash
+pswitch completion            # 按 $SHELL 自动识别
+pswitch completion zsh        # 也可以显式指定 zsh / bash / fish
+pswitch completion --print zsh    # 只打印脚本，自己放到别处
+pswitch completion --uninstall    # 移除（省略 shell 时清理全部）
+```
+
+安装位置：
+
+- zsh / bash：`$PSWITCH_HOME/completions/`，并在 `~/.zshrc` 或
+  `~/.bashrc` / `~/.bash_profile` 里维护一个
+  `# >>> pswitch completion >>>` 区块；重复执行只会更新该区块。
+- fish：`$XDG_CONFIG_HOME/fish/completions/pswitch.fish`，fish 会自动加载。
+
+补全脚本只调用 `pswitch list`，所以 Python / Go / Rust 三份实现装出来的
+补全行为完全一致。
 
 ## 配置文件
 

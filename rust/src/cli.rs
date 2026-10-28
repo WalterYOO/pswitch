@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use clap::{Parser, Subcommand};
 
+use crate::completion;
 use crate::config::{self, Config, Health, Upstream};
 use crate::launchd;
 use crate::probe;
@@ -80,6 +81,17 @@ enum Cmd {
         #[command(subcommand)]
         action: SystemAction,
     },
+    /// 安装 shell 补全（默认按 $SHELL 识别）
+    Completion {
+        /// 目标 shell：zsh | bash | fish
+        shell: Option<String>,
+        /// 只把补全脚本打印到标准输出
+        #[arg(long)]
+        print: bool,
+        /// 移除已安装的补全（省略 shell 时清理全部）
+        #[arg(long)]
+        uninstall: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -105,6 +117,14 @@ pub fn run() -> u8 {
             // 纯查询，不应该顺手创建配置文件
             println!("pswitch {}", env!("CARGO_PKG_VERSION"));
             0
+        }
+        Cmd::Completion {
+            shell,
+            print,
+            uninstall,
+        } => {
+            // 只是装补全，同样不该创建配置文件
+            completion::run(shell.as_deref(), print, uninstall)
         }
         other => {
             if config::ensure_config() {
@@ -142,6 +162,7 @@ fn dispatch(cmd: Cmd) -> i32 {
         Cmd::Test { timeout } => cmd_test(timeout),
         Cmd::Logs { lines } => cmd_logs(lines),
         Cmd::System { action } => cmd_system(action),
+        Cmd::Completion { .. } => 0,
     }
 }
 

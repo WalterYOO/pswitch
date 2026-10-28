@@ -46,6 +46,11 @@ func Main(argv []string) int {
 		return server.Serve(*foreground, *debug)
 	}
 
+	if cmd == "completion" {
+		// 只是装补全，不该顺手创建配置文件
+		return cmdCompletion(args)
+	}
+
 	created, err := config.Ensure()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "创建配置目录失败: %v\n", err)
@@ -118,6 +123,8 @@ func usage() {
   system on|off|status     管理 macOS 系统代理
   system use <名字|host:port>
                            把系统代理直接指向某个上游（不经过 pswitch）
+  completion [zsh|bash|fish]
+                           安装 shell 补全（默认按 $SHELL 识别）
   version                  查看版本号
   serve                    前台运行转发进程（调试用）
 `)

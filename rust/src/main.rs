@@ -2,6 +2,7 @@
 mod logging;
 
 mod cli;
+mod completion;
 mod config;
 mod direct;
 mod launchd;

@@ -10,7 +10,7 @@ import sys
 import time
 import urllib.request
 
-from . import __version__, launchd
+from . import __version__, completion, launchd
 from .config import (
     CONFIG_PATH,
     HOME,
@@ -398,6 +398,11 @@ def cmd_version(args):
     return 0
 
 
+def cmd_completion(args):
+    return completion.run(args.shell, print_only=args.print_script,
+                          uninstall_mode=args.uninstall)
+
+
 def cmd_env(args):
     cfg = load_config()
     proxy = f"http://{cfg['listen']}"
@@ -676,6 +681,14 @@ def build_parser():
     sy.add_argument("target", nargs="?",
                     help="use 的目标：上游名字或 host:port（不经过 pswitch 直接指向上游）")
 
+    cp = sub.add_parser("completion", help="安装 shell 补全（zsh / bash / fish）")
+    cp.add_argument("shell", nargs="?",
+                    help="目标 shell，默认按 $SHELL 识别；--uninstall 省略时清理全部")
+    cp.add_argument("--print", dest="print_script", action="store_true",
+                    help="只把补全脚本打印到标准输出")
+    cp.add_argument("--uninstall", action="store_true",
+                    help="移除已安装的补全")
+
     return p
 
 
@@ -698,6 +711,9 @@ def main(argv=None):
     if args.cmd == "version":
         # 纯查询，不应该顺手创建配置文件
         return cmd_version(args)
+    if args.cmd == "completion":
+        # 只是装补全，同样不该创建配置文件
+        return cmd_completion(args)
     if ensure_config():
         print(f"已创建配置文件: {CONFIG_PATH}（还没有上游，用 pswitch add 添加）")
     return HANDLERS[args.cmd](args)

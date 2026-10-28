@@ -7,6 +7,19 @@
 0.1.5 及更早版本没有独立的变更文件，可查看 git 历史与
 [tags](https://github.com/WalterYOO/pswitch/tags)。
 
+## [0.1.7] - 2026-10-28
+
+三份实现（Python / Go / Rust）统一发布 0.1.7。
+
+### 新增
+
+- **`pswitch completion [zsh|bash|fish]`**（三版）：安装 shell 补全，
+  默认按 `$SHELL` 识别；`--print` 只把脚本打印到标准输出，`--uninstall`
+  移除。zsh / bash 会在启动文件里维护可重复执行的
+  `# >>> pswitch completion >>>` 区块，fish 写入
+  `$XDG_CONFIG_HOME/fish/completions/`。补全内容包含子命令、选项和
+  当前配置里的上游名字，三份实现共用同一份脚本。
+
 ## [0.1.6] - 2026-10-24
 
 三份实现（Python / Go / Rust）统一发布 0.1.6。
