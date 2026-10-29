@@ -63,7 +63,11 @@ func cmdStatus(args []string) int {
 		fmt.Println(err)
 		return 1
 	}
-	listening := pid != 0 && server.PortOpen(host, port, 400*time.Millisecond)
+	checkHost := host
+	if checkHost == "0.0.0.0" || checkHost == "::" {
+		checkHost = "127.0.0.1"
+	}
+	listening := pid != 0 && server.PortOpen(checkHost, port, 400*time.Millisecond)
 
 	fmt.Println("pswitch")
 	fmt.Printf("  配置文件  %s\n", config.ConfigPath())
@@ -77,6 +81,12 @@ func cmdStatus(args []string) int {
 		conn = "可连接"
 	}
 	fmt.Printf("  监听      %s  %s\n", cfg.Listen, conn)
+	if !config.IsLoopbackHost(host) {
+		fmt.Printf("  允许来源  %s\n", config.AllowText(cfg.AllowCIDRs))
+		if len(cfg.DenyCIDRs) > 0 {
+			fmt.Printf("  拒绝来源  %s\n", listText(cfg.DenyCIDRs, "无"))
+		}
+	}
 
 	mode := cfg.Mode
 	direct := mode == config.ModeDirect
@@ -182,8 +192,17 @@ func cmdEnv(args []string) int {
 		return code
 	}
 	cfg := config.Load()
-	proxy := fmt.Sprintf("http://%s", cfg.Listen)
-	socks := fmt.Sprintf("socks5://%s", cfg.Listen)
+	host, port, err := config.SplitHostPort(cfg.Listen)
+	if err != nil {
+		fmt.Println(err)
+		return 1
+	}
+	if host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	addr := config.JoinHostPort(host, port)
+	proxy := fmt.Sprintf("http://%s", addr)
+	socks := fmt.Sprintf("socks5://%s", addr)
 	for _, line := range []string{
 		fmt.Sprintf(`export http_proxy="%s"`, proxy),
 		fmt.Sprintf(`export https_proxy="%s"`, proxy),
@@ -213,6 +232,9 @@ func cmdTest(args []string) int {
 	if err != nil {
 		fmt.Println(err)
 		return 1
+	}
+	if host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
 	}
 	proxyURL, _ := url.Parse(fmt.Sprintf("http://%s:%d", host, port))
 	client := &http.Client{

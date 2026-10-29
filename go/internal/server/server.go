@@ -34,6 +34,8 @@ type Server struct {
 	cfg         config.Config
 	health      map[string]config.Health
 	active      *config.Upstream
+	allow       []*net.IPNet
+	deny        []*net.IPNet
 	configMtime time.Time
 	ln          net.Listener
 
@@ -47,6 +49,8 @@ func New(cfg config.Config, log *logging.Logger) *Server {
 		log:         log,
 		cfg:         cfg,
 		health:      map[string]config.Health{},
+		allow:       config.ParseCIDRs(cfg.AllowCIDRs),
+		deny:        config.ParseCIDRs(cfg.DenyCIDRs),
 		configMtime: ConfigMtime(),
 		stop:        make(chan struct{}),
 	}
@@ -71,6 +75,8 @@ func (s *Server) Run() error {
 	if s.active != nil {
 		activeName = s.active.Name
 	}
+	allowCIDRs := append([]string(nil), s.cfg.AllowCIDRs...)
+	denyCIDRs := append([]string(nil), s.cfg.DenyCIDRs...)
 	s.mu.Unlock()
 
 	if err := os.WriteFile(config.PIDPath(), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
@@ -87,6 +93,12 @@ func (s *Server) Run() error {
 	} else {
 		s.log.Infof("pswitch 已启动，监听 %s:%d，模式 %s，当前上游 %s",
 			host, port, mode, activeName)
+	}
+	if !config.IsLoopbackHost(host) {
+		s.log.Infof("允许来源（LAN）: %s", config.AllowText(allowCIDRs))
+		if len(denyCIDRs) > 0 {
+			s.log.Infof("拒绝来源（LAN）: %s", strings.Join(denyCIDRs, ", "))
+		}
 	}
 
 	go s.healthLoop()
@@ -154,8 +166,15 @@ func (s *Server) handle(c net.Conn) {
 	if hasActive {
 		activeCopy = *active
 	}
+	allow := s.allow
+	deny := s.deny
 	candidates := s.candidatesLocked(active)
 	s.mu.RUnlock()
+
+	if ip := remoteIP(c.RemoteAddr()); ip != nil && !config.PeerAllowed(allow, deny, ip) {
+		s.log.Warnf("拒绝来自 %s 的连接：不在允许来源列表中", peer)
+		return
+	}
 
 	if cfg.Mode == config.ModeDirect {
 		direct.Handle(c, &cfg, s.log)
@@ -375,6 +394,8 @@ func (s *Server) Reload() {
 		cfg.Listen = s.cfg.Listen
 	}
 	s.cfg = cfg
+	s.allow = config.ParseCIDRs(cfg.AllowCIDRs)
+	s.deny = config.ParseCIDRs(cfg.DenyCIDRs)
 	s.configMtime = ConfigMtime()
 	needProbe := cfg.Mode != config.ModeDirect && len(s.health) == 0
 	s.mu.Unlock()
@@ -439,6 +460,21 @@ func orNone(s string) string {
 // --------------------------------------------------------------------------
 // 进程 / 端口辅助
 // --------------------------------------------------------------------------
+
+// remoteIP 从 net.Addr 提取来源 IP。
+func remoteIP(addr net.Addr) net.IP {
+	if addr == nil {
+		return nil
+	}
+	if a, ok := addr.(*net.TCPAddr); ok {
+		return a.IP
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return nil
+	}
+	return net.ParseIP(host)
+}
 
 // ReadPID 读取 PID 文件。
 func ReadPID() int {

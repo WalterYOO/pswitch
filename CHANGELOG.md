@@ -7,6 +7,27 @@
 0.1.5 及更早版本没有独立的变更文件，可查看 git 历史与
 [tags](https://github.com/WalterYOO/pswitch/tags)。
 
+## [0.1.8] - 2026-10-29
+
+三份实现（Python / Go / Rust）统一发布 0.1.8。
+
+### 新增
+
+- **`pswitch lan on|off|allow|status`**（三版）：在 `127.0.0.1` 与 `0.0.0.0`
+  之间切换监听。开启 LAN 监听前必须指定允许来源（任意多个 IP 或 CIDR，例如
+  `pswitch lan on 192.168.3.0/24 192.168.3.40`）；`pswitch lan allow` 可随时
+  查看/覆盖，`--clear` 清空。回环地址始终允许，列表为空时只有本机可连接。
+  切换监听地址会自动重启守护进程。
+- **来源白名单**：配置新增 `allow_cidrs`。守护进程在 accept 后按来源 IP 校验，
+  不在列表中的连接直接断开并记录日志；白名单变更随配置热重载生效。
+- **来源拒绝列表**：配置新增 `deny_cidrs`，用 `pswitch lan deny ...` 维护；
+  优先级高于 `allow_cidrs`，命中即断开。回环地址不受 allow / deny 限制。
+
+### 变更
+
+- `pswitch status` 在监听 `0.0.0.0` 时显示允许来源，并用 `127.0.0.1` 做端口探测。
+- `pswitch env` / `pswitch test` 在监听 `0.0.0.0` 时改用 `127.0.0.1` 访问本地端口。
+
 ## [0.1.7] - 2026-10-28
 
 三份实现（Python / Go / Rust）统一发布 0.1.7。

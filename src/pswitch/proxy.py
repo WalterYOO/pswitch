@@ -18,7 +18,9 @@ from .config import (
     STATE_PATH,
     config_hint,
     enabled_upstreams,
+    is_loopback_host,
     load_config,
+    peer_allowed,
     split_hostport,
     write_json,
 )
@@ -260,6 +262,11 @@ class ProxyServer:
     # -- 连接处理 --------------------------------------------------------
     async def handle(self, creader, cwriter):
         peer = cwriter.get_extra_info("peername")
+        if peer and not peer_allowed(self.cfg.get("allow_cidrs"),
+                                      self.cfg.get("deny_cidrs"), peer[0]):
+            log.warning("拒绝来自 %s 的连接：不在允许来源列表中", peer)
+            cwriter.close()
+            return
         if self.cfg.get("mode") == "direct":
             await handle_direct(creader, cwriter, self.cfg, peer)
             return
@@ -314,6 +321,9 @@ class ProxyServer:
         await self._check_all()
         server = await asyncio.start_server(self.handle, host, port, reuse_address=True)
         PID_PATH.write_text(str(os.getpid()))
+        if not is_loopback_host(host):
+            allow = ", ".join(self.cfg.get("allow_cidrs") or []) or "无（仅本机）"
+            log.info("允许来源（LAN）: %s", allow)
         if self.cfg.get("mode") == "direct":
             log.info("pswitch 已启动，监听 %s:%s，模式 direct（全部直连）", host, port)
         else:

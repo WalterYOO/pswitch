@@ -29,6 +29,10 @@ pub struct Config {
     pub failover: bool,
     pub probe_url: String,
     pub probe_timeout: f64,
+    /// 监听非本机地址时允许的来源（IP 或网段）；为空表示只接受本机连接。
+    pub allow_cidrs: Vec<String>,
+    /// 拒绝来源（IP 或网段），优先级高于 allow_cidrs；回环同样不受限。
+    pub deny_cidrs: Vec<String>,
     pub upstreams: Vec<Upstream>,
 }
 
@@ -43,6 +47,8 @@ impl Default for Config {
             failover: true,
             probe_url: "http://connectivitycheck.gstatic.com/generate_204".to_string(),
             probe_timeout: 3.0,
+            allow_cidrs: Vec::new(),
+            deny_cidrs: Vec::new(),
             upstreams: Vec::new(),
         }
     }
@@ -214,6 +220,20 @@ pub fn load_config() -> Config {
     }
     if let Some(v) = num_f64(obj.get("probe_timeout")) {
         cfg.probe_timeout = v;
+    }
+    if let Some(Value::Array(list)) = obj.get("allow_cidrs") {
+        cfg.allow_cidrs = list
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|s| s.to_string())
+            .collect();
+    }
+    if let Some(Value::Array(list)) = obj.get("deny_cidrs") {
+        cfg.deny_cidrs = list
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|s| s.to_string())
+            .collect();
     }
     if let Some(Value::Array(list)) = obj.get("upstreams") {
         for item in list {

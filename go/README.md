@@ -30,6 +30,7 @@ go build -o bin/pswitch ./cmd/pswitch
 | macOS launchd `install/uninstall` | ✅ |
 | macOS `system on/off/status` 系统代理 | ✅ |
 | macOS `system use <名字\|host:port>` 直连上游 | ✅ |
+| `lan on/off/allow/deny/status`：LAN 监听切换与来源 IP / 网段白名单、黑名单 | ✅ |
 | `completion [zsh\|bash\|fish]` 安装 shell 补全 | ✅ |
 | 日志按 1 MB × 3 轮转 | ✅ |
 

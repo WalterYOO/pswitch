@@ -21,7 +21,9 @@ from .config import (
     ensure_config,
     find_upstream,
     has_upstreams,
+    is_loopback_host,
     load_config,
+    normalize_cidrs,
     read_json,
     save_config,
     split_hostport,
@@ -167,7 +169,8 @@ def cmd_status(args):
     st = read_json(STATE_PATH) or {}
     pid = daemon_running()
     host, port = split_hostport(cfg["listen"])
-    listening = port_open(host, port) if pid else False
+    check_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+    listening = port_open(check_host, port) if pid else False
 
     print("pswitch")
     print(f"  配置文件  {CONFIG_PATH}")
@@ -176,6 +179,10 @@ def cmd_status(args):
     else:
         print("  守护进程  未运行  → pswitch start")
     print(f"  监听      {cfg['listen']}  {'可连接' if listening else '不可连接'}")
+    if not is_loopback_host(host):
+        print(f"  允许来源  {_allow_text(cfg)}")
+        if cfg.get("deny_cidrs"):
+            print(f"  拒绝来源  {_deny_text(cfg)}")
 
     mode = cfg.get("mode")
     direct = mode == "direct"
@@ -390,6 +397,147 @@ def cmd_disable(args):
 
 
 # --------------------------------------------------------------------------
+# LAN 监听 / 允许来源
+# --------------------------------------------------------------------------
+
+def _allow_text(cfg):
+    entries = cfg.get("allow_cidrs") or []
+    return ", ".join(entries) if entries else "无（仅本机可连接）"
+
+
+def _deny_text(cfg):
+    entries = cfg.get("deny_cidrs") or []
+    return ", ".join(entries) if entries else "无"
+
+
+def _lan_mode(host):
+    if is_loopback_host(host):
+        return "仅本机"
+    if host in ("0.0.0.0", "::"):
+        return "LAN 已开启"
+    return "自定义地址"
+
+
+def _print_list(cfg, key, title, empty):
+    entries = cfg.get(key) or []
+    if not entries:
+        print(f"{title}: {empty}")
+        return 0
+    print(f"{title}:")
+    for entry in entries:
+        print(f"  {entry}")
+    return 0
+
+
+def _lan_list_action(args, key, title, suffix, empty):
+    cfg = load_config()
+    entries = list(args.entries or [])
+    if args.clear and entries:
+        print("--clear 不能和 IP / 网段一起使用")
+        return 2
+    if args.clear:
+        cfg[key] = []
+        save_config(cfg)
+        signal_daemon(signal.SIGHUP)
+        print(f"已清空{title}")
+    elif not entries:
+        return _print_list(cfg, key, title, empty)
+    else:
+        try:
+            cfg[key] = normalize_cidrs(entries)
+        except ValueError as e:
+            print(e)
+            return 1
+        save_config(cfg)
+        signal_daemon(signal.SIGHUP)
+        print(f"{title}: {', '.join(cfg[key])}{suffix}")
+
+    host, _ = split_hostport(cfg["listen"])
+    if is_loopback_host(host):
+        print("当前只监听本机，这项设置会在 pswitch lan on 后生效")
+    elif key == "allow_cidrs" and not cfg[key]:
+        print("注意：当前监听 LAN 地址，允许来源为空，只有本机能连接")
+    return 0
+
+
+def _print_lan(cfg):
+    host, _ = split_hostport(cfg["listen"])
+    pid = daemon_running()
+    print("pswitch lan")
+    print(f"  监听      {cfg['listen']}  （{_lan_mode(host)}）")
+    print(f"  允许来源  {_allow_text(cfg)}")
+    print(f"  拒绝来源  {_deny_text(cfg)}")
+    print(f"  守护进程  {'运行中 (pid %d)' % pid if pid else '未运行'}")
+    return 0
+
+
+def _apply_listen_change(cfg, new_listen):
+    """写入配置；监听地址变化且守护进程在跑时重启以生效。"""
+    old_listen = cfg["listen"]
+    cfg["listen"] = new_listen
+    save_config(cfg)
+    if new_listen == old_listen:
+        signal_daemon(signal.SIGHUP)
+        return 0
+    if daemon_running():
+        print("监听地址已变更，正在重启守护进程…")
+        return cmd_restart(None)
+    return 0
+
+
+def cmd_lan(args):
+    cfg = load_config()
+    entries = list(args.entries or [])
+
+    if args.action == "status":
+        return _print_lan(cfg)
+
+    if args.action == "allow":
+        return _lan_list_action(args, "allow_cidrs", "允许来源",
+                                "（本机始终允许）", "未配置（仅本机可连接）")
+    if args.action == "deny":
+        return _lan_list_action(args, "deny_cidrs", "拒绝来源",
+                                "（优先级高于允许来源）", "未配置")
+
+    host, port = split_hostport(cfg["listen"])
+
+    if args.action == "on":
+        if entries:
+            try:
+                cfg["allow_cidrs"] = normalize_cidrs(entries)
+            except ValueError as e:
+                print(e)
+                return 1
+        elif not cfg.get("allow_cidrs"):
+            print("为安全起见，开启 LAN 监听前请指定允许来源，可给任意多个 IP 或网段，例如:")
+            print("  pswitch lan on 192.168.3.0/24")
+            print("  pswitch lan on 192.168.3.40 10.0.0.8")
+            return 1
+        code = _apply_listen_change(cfg, f"0.0.0.0:{port}")
+        if code != 0:
+            return code
+        if host == "0.0.0.0":
+            print(f"LAN 监听已开启: 0.0.0.0:{port}")
+        else:
+            print(f"已开启 LAN 监听: 0.0.0.0:{port}")
+        print(f"允许来源: {', '.join(cfg['allow_cidrs'])}（本机始终允许，其余来源拒绝）")
+        return 0
+
+    if args.action == "off":
+        if is_loopback_host(host):
+            print(f"当前已只监听本机: {cfg['listen']}")
+            return 0
+        code = _apply_listen_change(cfg, f"127.0.0.1:{port}")
+        if code != 0:
+            return code
+        print(f"已关闭 LAN 监听: 127.0.0.1:{port}（仅本机可连接）")
+        return 0
+
+    print(f"未知的 lan 动作: {args.action}")
+    return 2
+
+
+# --------------------------------------------------------------------------
 # 其他命令
 # --------------------------------------------------------------------------
 
@@ -405,8 +553,11 @@ def cmd_completion(args):
 
 def cmd_env(args):
     cfg = load_config()
-    proxy = f"http://{cfg['listen']}"
-    socks = f"socks5://{cfg['listen']}"
+    host, port = split_hostport(cfg["listen"])
+    if host in ("0.0.0.0", "::"):
+        host = "127.0.0.1"
+    proxy = f"http://{host}:{port}"
+    socks = f"socks5://{host}:{port}"
     for line in (
         f'export http_proxy="{proxy}"',
         f'export https_proxy="{proxy}"',
@@ -426,6 +577,8 @@ def cmd_test(args):
     if cfg.get("mode") != "direct" and not require_upstreams(cfg, "测试"):
         return 1
     host, port = split_hostport(cfg["listen"])
+    if host in ("0.0.0.0", "::"):
+        host = "127.0.0.1"
     proxy = f"http://{host}:{port}"
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
@@ -681,6 +834,14 @@ def build_parser():
     sy.add_argument("target", nargs="?",
                     help="use 的目标：上游名字或 host:port（不经过 pswitch 直接指向上游）")
 
+    lan = sub.add_parser(
+        "lan", help="管理 LAN 监听（127.0.0.1 ↔ 0.0.0.0）与允许来源")
+    lan.add_argument("action", choices=["on", "off", "allow", "deny", "status"])
+    lan.add_argument("entries", nargs="*", metavar="IP|CIDR",
+                     help="来源列表：任意多个 IP 或网段")
+    lan.add_argument("--clear", action="store_true",
+                     help="清空 allow / deny 列表")
+
     cp = sub.add_parser("completion", help="安装 shell 补全（zsh / bash / fish）")
     cp.add_argument("shell", nargs="?",
                     help="目标 shell，默认按 $SHELL 识别；--uninstall 省略时清理全部")
@@ -700,7 +861,7 @@ HANDLERS = {
     "env": cmd_env,
     "test": cmd_test, "logs": cmd_logs,
     "install": cmd_install, "uninstall": cmd_uninstall,
-    "system": cmd_system, "version": cmd_version,
+    "system": cmd_system, "lan": cmd_lan, "version": cmd_version,
 }
 
 

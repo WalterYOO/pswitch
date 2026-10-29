@@ -86,6 +86,11 @@ pswitch env             # 打印代理环境变量
 pswitch system on       # 系统代理 -> 本地端口 127.0.0.1:17000
 pswitch system use office    # 系统代理 -> 直接指向 office 的地址（不经过 pswitch）
 pswitch system use 10.0.0.8:8080   # 也可以直接给 host:port
+pswitch lan on 192.168.3.0/24   # 允许局域网访问，只放行这个网段
+pswitch lan allow 10.0.0.8      # 覆盖允许来源（本机回环始终允许）
+pswitch lan deny 192.168.3.66   # 从允许网段里再排除某个地址
+pswitch lan status              # 查看监听地址与来源列表
+pswitch lan off                 # 收回成 127.0.0.1，仅本机可用
 pswitch disable office  # 临时不用它（如内网代理在当前网络不可达），配置保留
 pswitch enable office   # 恢复
 pswitch completion      # 安装当前 shell 的命令补全
@@ -108,6 +113,11 @@ pswitch version         # 查看当前版本号
 | `install` / `uninstall` | 安装/卸载 launchd 开机自启 |
 | `system on\|off\|status` | 把 macOS 系统代理指向/取消指向本地端口 |
 | `system use <名\|host:port>` | 把系统代理直接指向某个上游（不经过 pswitch；`system on` 可切回本地端口） |
+| `lan on [IP\|网段...]` | 切到 `0.0.0.0` 监听，可同时覆盖允许来源；没有白名单时拒绝开启 |
+| `lan off` | 切回 `127.0.0.1`，只有本机能连接 |
+| `lan allow [IP\|网段...]` | 查看/覆盖允许来源；`--clear` 清空；本机回环始终允许 |
+| `lan deny [IP\|网段...]` | 查看/覆盖拒绝来源；命中即拒绝，优先级高于 allow；`--clear` 清空 |
+| `lan status` | 查看监听地址、允许/拒绝来源与守护进程状态 |
 | `completion [zsh\|bash\|fish]` | 安装 shell 补全；`--print` 只输出脚本，`--uninstall` 移除 |
 | `version`（或 `-V` / `--version`） | 查看版本号 |
 
@@ -147,12 +157,22 @@ pswitch completion --uninstall    # 移除（省略 shell 时清理全部）
   "failover": true,
   "probe_url": "http://connectivitycheck.gstatic.com/generate_204",
   "probe_timeout": 3,
+  "allow_cidrs": [],
+  "deny_cidrs": [],
   "upstreams": []
 }
 ```
 
 - 直接编辑也没关系，守护进程会检测到文件变化并自动重载。
-- 改 `listen` 需要 `pswitch restart` 才生效。
+- 改 `listen` 需要 `pswitch restart` 才生效；用 `pswitch lan on|off` 切换会自动重启。
+- `allow_cidrs` 是监听非本机地址时允许的来源（IP 或 CIDR），例如
+  `["192.168.3.0/24", "192.168.3.40/32"]`。回环地址（`127.0.0.1` / `::1`）始终允许；
+  列表为空时只有本机能连接。用 `pswitch lan on <IP|网段...>` 或
+  `pswitch lan allow ...` 维护，不建议手改。
+- `deny_cidrs` 是拒绝来源，优先级高于 `allow_cidrs`：先命中 deny 就断开，再按
+  allow 放行。回环地址不受这两个列表限制。用 `pswitch lan deny ...` 维护。
+- **LAN 监听没有认证**：`allow_cidrs` / `deny_cidrs` 是访问控制，按来源 IP / 网段放行
+  或拒绝。除非明确知道风险，不要配置 `0.0.0.0/0` 之类的全放行网段。
 - `mode: auto` 时按 `upstreams` 顺序取第一个探活通过的；`mode: manual` 时固定 `active`。
 - `mode: direct` 时完全不使用上游：pswitch 自己解析 HTTP CONNECT / 普通 HTTP / SOCKS5，
   直接连接目标。此时没有配置上游也能 `pswitch start`，`use direct` 与 `use auto|名字`

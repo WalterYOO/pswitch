@@ -33,7 +33,7 @@ func TestScriptsListEveryCommand(t *testing.T) {
 	commands := []string{
 		"start", "stop", "restart", "status", "use", "list",
 		"add", "remove", "priority", "enable", "disable", "env", "test",
-		"logs", "install", "uninstall", "system", "completion", "version",
+		"logs", "install", "uninstall", "system", "lan", "completion", "version",
 	}
 	for _, shell := range shells {
 		for _, command := range commands {

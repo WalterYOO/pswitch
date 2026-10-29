@@ -81,6 +81,11 @@ enum Cmd {
         #[command(subcommand)]
         action: SystemAction,
     },
+    /// 管理 LAN 监听（127.0.0.1 ↔ 0.0.0.0）与允许来源
+    Lan {
+        #[command(subcommand)]
+        action: LanAction,
+    },
     /// 安装 shell 补全（默认按 $SHELL 识别）
     Completion {
         /// 目标 shell：zsh | bash | fish
@@ -92,6 +97,35 @@ enum Cmd {
         #[arg(long)]
         uninstall: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum LanAction {
+    /// 切到 0.0.0.0 监听，可同时覆盖允许来源
+    On {
+        /// 允许来源：IP 或网段，可给多个
+        entries: Vec<String>,
+    },
+    /// 切回 127.0.0.1 监听
+    Off,
+    /// 查看/覆盖允许来源（本机始终允许）
+    Allow {
+        /// IP 或网段，可给多个；省略则只查看
+        entries: Vec<String>,
+        /// 清空允许来源
+        #[arg(long)]
+        clear: bool,
+    },
+    /// 查看/覆盖拒绝来源（优先于允许来源）
+    Deny {
+        /// IP 或网段，可给多个；省略则只查看
+        entries: Vec<String>,
+        /// 清空拒绝来源
+        #[arg(long)]
+        clear: bool,
+    },
+    /// 查看当前监听与来源列表
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -162,6 +196,7 @@ fn dispatch(cmd: Cmd) -> i32 {
         Cmd::Test { timeout } => cmd_test(timeout),
         Cmd::Logs { lines } => cmd_logs(lines),
         Cmd::System { action } => cmd_system(action),
+        Cmd::Lan { action } => cmd_lan(action),
         Cmd::Completion { .. } => 0,
     }
 }
@@ -387,7 +422,12 @@ fn cmd_status() -> i32 {
             return 1;
         }
     };
-    let listening = pid.is_some() && util::port_open(&host, port, Duration::from_millis(400));
+    let check_host = if host == "0.0.0.0" || host == "::" {
+        "127.0.0.1"
+    } else {
+        host.as_str()
+    };
+    let listening = pid.is_some() && util::port_open(check_host, port, Duration::from_millis(400));
 
     println!("pswitch");
     println!("  配置文件  {}", config::config_path().display());
@@ -400,6 +440,12 @@ fn cmd_status() -> i32 {
         cfg.listen,
         if listening { "可连接" } else { "不可连接" }
     );
+    if !util::is_loopback_host(&host) {
+        println!("  允许来源  {}", allow_text(&cfg.allow_cidrs));
+        if !cfg.deny_cidrs.is_empty() {
+            println!("  拒绝来源  {}", list_text(&cfg.deny_cidrs, "无"));
+        }
+    }
 
     let direct = cfg.is_direct();
 
@@ -727,13 +773,226 @@ fn set_enabled(name: &str, enabled: bool) -> i32 {
 }
 
 // --------------------------------------------------------------------------
+// LAN 监听 / 允许来源
+// --------------------------------------------------------------------------
+
+fn allow_text(entries: &[String]) -> String {
+    if entries.is_empty() {
+        "无（仅本机可连接）".to_string()
+    } else {
+        entries.join(", ")
+    }
+}
+
+fn lan_mode(host: &str) -> &'static str {
+    if util::is_loopback_host(host) {
+        "仅本机"
+    } else if host == "0.0.0.0" || host == "::" {
+        "LAN 已开启"
+    } else {
+        "自定义地址"
+    }
+}
+
+fn list_text(entries: &[String], empty: &str) -> String {
+    if entries.is_empty() {
+        empty.to_string()
+    } else {
+        entries.join(", ")
+    }
+}
+
+fn print_list(entries: &[String], title: &str, empty: &str) -> i32 {
+    if entries.is_empty() {
+        println!("{}: {}", title, empty);
+        return 0;
+    }
+    println!("{}:", title);
+    for entry in entries {
+        println!("  {}", entry);
+    }
+    0
+}
+
+fn cmd_lan(action: LanAction) -> i32 {
+    let cfg = config::load_config();
+    match action {
+        LanAction::Status => lan_status(&cfg),
+        LanAction::Allow { entries, clear } => lan_set_list(cfg, entries, clear, true),
+        LanAction::Deny { entries, clear } => lan_set_list(cfg, entries, clear, false),
+        LanAction::On { entries } => lan_on(cfg, entries),
+        LanAction::Off => lan_off(cfg),
+    }
+}
+
+fn lan_on(mut cfg: Config, entries: Vec<String>) -> i32 {
+    let (host, port) = match util::split_hostport(&cfg.listen) {
+        Ok(v) => v,
+        Err(e) => {
+            println!("{}", e);
+            return 1;
+        }
+    };
+    if !entries.is_empty() {
+        match util::normalize_cidrs(&entries) {
+            Ok(v) => cfg.allow_cidrs = v,
+            Err(e) => {
+                println!("{}", e);
+                return 1;
+            }
+        }
+    } else if cfg.allow_cidrs.is_empty() {
+        println!("为安全起见，开启 LAN 监听前请指定允许来源，可给任意多个 IP 或网段，例如:");
+        println!("  pswitch lan on 192.168.3.0/24");
+        println!("  pswitch lan on 192.168.3.40 10.0.0.8");
+        return 1;
+    }
+
+    let code = apply_listen(&cfg, &format!("0.0.0.0:{}", port));
+    if code != 0 {
+        return code;
+    }
+    if host == "0.0.0.0" {
+        println!("LAN 监听已开启: 0.0.0.0:{}", port);
+    } else {
+        println!("已开启 LAN 监听: 0.0.0.0:{}", port);
+    }
+    println!(
+        "允许来源: {}（本机始终允许，其余来源拒绝）",
+        cfg.allow_cidrs.join(", ")
+    );
+    0
+}
+
+fn lan_off(cfg: Config) -> i32 {
+    let (host, port) = match util::split_hostport(&cfg.listen) {
+        Ok(v) => v,
+        Err(e) => {
+            println!("{}", e);
+            return 1;
+        }
+    };
+    if util::is_loopback_host(&host) {
+        println!("当前已只监听本机: {}", cfg.listen);
+        return 0;
+    }
+    let code = apply_listen(&cfg, &format!("127.0.0.1:{}", port));
+    if code != 0 {
+        return code;
+    }
+    println!("已关闭 LAN 监听: 127.0.0.1:{}（仅本机可连接）", port);
+    0
+}
+
+fn lan_set_list(mut cfg: Config, entries: Vec<String>, clear: bool, is_allow: bool) -> i32 {
+    if clear && !entries.is_empty() {
+        println!("--clear 不能和 IP / 网段一起使用");
+        return 2;
+    }
+    let (title, suffix, empty) = if is_allow {
+        ("允许来源", "（本机始终允许）", "未配置（仅本机可连接）")
+    } else {
+        ("拒绝来源", "（优先级高于允许来源）", "未配置")
+    };
+    if !clear && entries.is_empty() {
+        let current = if is_allow {
+            &cfg.allow_cidrs
+        } else {
+            &cfg.deny_cidrs
+        };
+        return print_list(current, title, empty);
+    }
+
+    let normalized = if clear {
+        Vec::new()
+    } else {
+        match util::normalize_cidrs(&entries) {
+            Ok(v) => v,
+            Err(e) => {
+                println!("{}", e);
+                return 1;
+            }
+        }
+    };
+    if is_allow {
+        cfg.allow_cidrs = normalized.clone();
+    } else {
+        cfg.deny_cidrs = normalized.clone();
+    }
+    config::save_config(&cfg);
+    util::signal_daemon(libc::SIGHUP);
+
+    if normalized.is_empty() {
+        println!("已清空{}", title);
+    } else {
+        println!("{}: {}{}", title, normalized.join(", "), suffix);
+    }
+    if let Ok((host, _)) = util::split_hostport(&cfg.listen) {
+        if util::is_loopback_host(&host) {
+            println!("当前只监听本机，这项设置会在 pswitch lan on 后生效");
+        } else if is_allow && normalized.is_empty() {
+            println!("注意：当前监听 LAN 地址，允许来源为空，只有本机能连接");
+        }
+    }
+    0
+}
+
+fn lan_status(cfg: &Config) -> i32 {
+    let host = match util::split_hostport(&cfg.listen) {
+        Ok((host, _)) => host,
+        Err(e) => {
+            println!("{}", e);
+            return 1;
+        }
+    };
+    println!("pswitch lan");
+    println!("  监听      {}  （{}）", cfg.listen, lan_mode(&host));
+    println!("  允许来源  {}", allow_text(&cfg.allow_cidrs));
+    println!("  拒绝来源  {}", list_text(&cfg.deny_cidrs, "无"));
+    match util::daemon_running() {
+        Some(pid) => println!("  守护进程  运行中 (pid {})", pid),
+        None => println!("  守护进程  未运行"),
+    }
+    0
+}
+
+// apply_listen 写入配置；监听地址变化且守护进程在跑时重启以生效。
+fn apply_listen(cfg: &Config, new_listen: &str) -> i32 {
+    let old_listen = cfg.listen.clone();
+    let mut next = cfg.clone();
+    next.listen = new_listen.to_string();
+    config::save_config(&next);
+    if new_listen == old_listen {
+        util::signal_daemon(libc::SIGHUP);
+        return 0;
+    }
+    if util::daemon_running().is_some() {
+        println!("监听地址已变更，正在重启守护进程…");
+        cmd_stop();
+        return cmd_start();
+    }
+    0
+}
+
+// --------------------------------------------------------------------------
 // 其他命令
 // --------------------------------------------------------------------------
 
 fn cmd_env() -> i32 {
     let cfg = config::load_config();
-    let proxy = format!("http://{}", cfg.listen);
-    let socks = format!("socks5://{}", cfg.listen);
+    let (mut host, port) = match util::split_hostport(&cfg.listen) {
+        Ok(v) => v,
+        Err(e) => {
+            println!("{}", e);
+            return 1;
+        }
+    };
+    if host == "0.0.0.0" || host == "::" {
+        host = "127.0.0.1".to_string();
+    }
+    let addr = format!("{}:{}", host, port);
+    let proxy = format!("http://{}", addr);
+    let socks = format!("socks5://{}", addr);
     for line in [
         format!("export http_proxy=\"{}\"", proxy),
         format!("export https_proxy=\"{}\"", proxy),
@@ -754,7 +1013,17 @@ fn cmd_test(timeout: f64) -> i32 {
     if !cfg.is_direct() && !require_upstreams(&cfg, "测试") {
         return 1;
     }
-    let proxy_url = format!("http://{}", cfg.listen);
+    let (mut host, port) = match util::split_hostport(&cfg.listen) {
+        Ok(v) => v,
+        Err(e) => {
+            println!("{}", e);
+            return 1;
+        }
+    };
+    if host == "0.0.0.0" || host == "::" {
+        host = "127.0.0.1".to_string();
+    }
+    let proxy_url = format!("http://{}:{}", host, port);
     let proxy = match ureq::Proxy::new(&proxy_url) {
         Ok(p) => p,
         Err(e) => {

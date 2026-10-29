@@ -96,6 +96,8 @@ func Main(argv []string) int {
 		return cmdUninstall(args)
 	case "system":
 		return cmdSystem(args)
+	case "lan":
+		return cmdLan(args)
 	default:
 		fmt.Fprintf(os.Stderr, "未知命令: %s\n\n", cmd)
 		usage()
@@ -123,6 +125,8 @@ func usage() {
   system on|off|status     管理 macOS 系统代理
   system use <名字|host:port>
                            把系统代理直接指向某个上游（不经过 pswitch）
+  lan on|off|allow|deny|status
+                           管理 LAN 监听与来源列表
   completion [zsh|bash|fish]
                            安装 shell 补全（默认按 $SHELL 识别）
   version                  查看版本号

@@ -46,6 +46,7 @@ _pswitch() {
     'install:安装为 launchd 开机自启'
     'uninstall:卸载开机自启'
     'system:管理 macOS 系统代理指向'
+    'lan:管理 LAN 监听与允许来源'
     'completion:安装 shell 补全'
     'version:查看版本号'
   )
@@ -89,6 +90,13 @@ _pswitch() {
             _pswitch_upstreams
           fi
           ;;
+        lan)
+          if (( CURRENT == 2 )); then
+            _values '动作' on off allow deny status
+          elif [[ $words[2] == allow ]] && (( CURRENT == 3 )); then
+            _values '选项' --clear
+          fi
+          ;;
         completion)
           _values 'shell' zsh bash fish
           _arguments '--print[只打印补全脚本]' '--uninstall[移除已安装的补全]'
@@ -125,7 +133,7 @@ _pswitch() {
     done
 
     if [[ -z "$cmd" ]]; then
-        COMPREPLY=($(compgen -W "start stop restart status use list add remove priority enable disable env test logs install uninstall system completion version" -- "$cur"))
+        COMPREPLY=($(compgen -W "start stop restart status use list add remove priority enable disable env test logs install uninstall system lan completion version" -- "$cur"))
         return
     fi
 
@@ -159,6 +167,13 @@ _pswitch() {
             ;;
         logs)
             COMPREPLY=($(compgen -W "-n --lines" -- "$cur"))
+            ;;
+        lan)
+            if [[ $COMP_CWORD -eq 2 ]]; then
+                COMPREPLY=($(compgen -W "on off allow deny status" -- "$cur"))
+            elif [[ $COMP_CWORD -eq 3 && ${COMP_WORDS[2]} == allow ]]; then
+                COMPREPLY=($(compgen -W "--clear" -- "$cur"))
+            fi
             ;;
         completion)
             COMPREPLY=($(compgen -W "zsh bash fish --print --uninstall" -- "$cur"))
@@ -199,6 +214,7 @@ complete -c pswitch -n '__fish_use_subcommand' -a logs -d '查看最近日志'
 complete -c pswitch -n '__fish_use_subcommand' -a install -d '安装为 launchd 开机自启'
 complete -c pswitch -n '__fish_use_subcommand' -a uninstall -d '卸载开机自启'
 complete -c pswitch -n '__fish_use_subcommand' -a system -d '管理 macOS 系统代理指向'
+complete -c pswitch -n '__fish_use_subcommand' -a lan -d '管理 LAN 监听与允许来源'
 complete -c pswitch -n '__fish_use_subcommand' -a completion -d '安装 shell 补全'
 complete -c pswitch -n '__fish_use_subcommand' -a version -d '查看版本号'
 
@@ -212,6 +228,8 @@ complete -c pswitch -n '__fish_seen_subcommand_from test' -l timeout -d '超时�
 complete -c pswitch -n '__fish_seen_subcommand_from logs' -s n -l lines -d '行数' -r
 complete -c pswitch -n '__fish_seen_subcommand_from system; and test (count (commandline -opc)) -eq 2' -a 'on off status use' -d '动作'
 complete -c pswitch -n '__fish_seen_subcommand_from system; and test (count (commandline -opc)) -eq 3; and test (commandline -opc)[3] = use' -a '(__pswitch_upstreams)' -d '上游'
+complete -c pswitch -n '__fish_seen_subcommand_from lan; and test (count (commandline -opc)) -eq 2' -a 'on off allow deny status' -d '动作'
+complete -c pswitch -n '__fish_seen_subcommand_from lan; and test (count (commandline -opc)) -eq 3; and test (commandline -opc)[3] = allow' -l clear -d '清空允许来源'
 complete -c pswitch -n '__fish_seen_subcommand_from completion' -a 'zsh bash fish' -d 'shell'
 complete -c pswitch -n '__fish_seen_subcommand_from completion' -l print -d '只打印补全脚本'
 complete -c pswitch -n '__fish_seen_subcommand_from completion' -l uninstall -d '移除已安装的补全'

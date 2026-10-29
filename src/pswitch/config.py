@@ -1,6 +1,7 @@
 """配置文件与运行时状态的读写。"""
 
 import copy
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -26,6 +27,11 @@ DEFAULT_CONFIG = {
     "failover": True,                     # 当前上游连不上时临时借用其它可用上游
     "probe_url": "http://connectivitycheck.gstatic.com/generate_204",
     "probe_timeout": 3,                   # HTTP 探活超时（秒）
+    # 监听非本机地址时允许的来源（IP 或网段）。为空表示只接受本机连接；
+    # 回环地址（127.0.0.1 / ::1）始终允许，不受此列表限制。
+    "allow_cidrs": [],
+    # 拒绝来源（IP 或网段），优先级高于 allow_cidrs；回环地址同样不受限制。
+    "deny_cidrs": [],
     "upstreams": [],
 }
 
@@ -96,3 +102,64 @@ def enabled_upstreams(cfg):
 
 def config_hint():
     return f"配置文件: {CONFIG_PATH}"
+
+
+# --------------------------------------------------------------------------
+# LAN 监听 / 允许来源
+# --------------------------------------------------------------------------
+
+_CIDR_EXAMPLE = "示例: 192.168.3.40 / 192.168.3.0/24"
+
+
+def normalize_cidr(entry):
+    """把 IP 或网段规范成 network 形式：192.168.3.40 -> 192.168.3.40/32。"""
+    text = str(entry).strip()
+    if not text:
+        raise ValueError("空的 IP / 网段")
+    try:
+        return str(ipaddress.ip_network(text, strict=False))
+    except ValueError:
+        raise ValueError(f"不是合法的 IP 或网段: {text}（{_CIDR_EXAMPLE}）") from None
+
+
+def normalize_cidrs(entries):
+    """规范化一组条目并去重，保持输入顺序。"""
+    out = []
+    for entry in entries:
+        net = normalize_cidr(entry)
+        if net not in out:
+            out.append(net)
+    return out
+
+
+def peer_allowed(allow_cidrs, deny_cidrs, ip):
+    """来源 IP 是否允许：回环始终允许；deny 优先于 allow；非法项忽略。"""
+    try:
+        addr = ipaddress.ip_address(str(ip).split("%", 1)[0])
+    except ValueError:
+        return False
+    if addr.is_loopback:
+        return True
+    for entry in deny_cidrs or []:
+        try:
+            if addr in ipaddress.ip_network(str(entry), strict=False):
+                return False
+        except ValueError:
+            continue
+    for entry in allow_cidrs or []:
+        try:
+            if addr in ipaddress.ip_network(str(entry), strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def is_loopback_host(host):
+    """监听地址是否只面向本机。"""
+    if host in ("", "localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(str(host).split("%", 1)[0]).is_loopback
+    except ValueError:
+        return False

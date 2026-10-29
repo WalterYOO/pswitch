@@ -29,6 +29,7 @@ install -m 755 rust/target/release/pswitch ~/.local/bin/pswitch
 | `test` / `env` / `logs` | 真实请求验证、环境变量、日志 |
 | `install` / `uninstall` / `system on\|off\|status` | macOS 开机自启 / 系统代理 |
 | `system use <名字\|host:port>` | 系统代理直接指向某个上游（不经过 pswitch） |
+| `lan on\|off\|allow\|deny\|status` | LAN 监听切换与来源 IP / 网段白名单、黑名单（回环始终允许） |
 | `completion [zsh\|bash\|fish]` | 安装 shell 补全（`--print` / `--uninstall`） |
 
 配置路径与 Python 版相同：`$PSWITCH_HOME`，缺省 `~/.config/proxy_switch/`。

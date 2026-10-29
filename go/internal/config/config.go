@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -46,15 +47,20 @@ type Health struct {
 
 // Config 与 Python 版的 config.json 一一对应。
 type Config struct {
-	Listen              string     `json:"listen"`
-	Mode                string     `json:"mode"`
-	Active              *string    `json:"active"`
-	HealthCheckInterval float64    `json:"health_check_interval"`
-	ConnectTimeout      float64    `json:"connect_timeout"`
-	Failover            bool       `json:"failover"`
-	ProbeURL            string     `json:"probe_url"`
-	ProbeTimeout        float64    `json:"probe_timeout"`
-	Upstreams           []Upstream `json:"upstreams"`
+	Listen              string  `json:"listen"`
+	Mode                string  `json:"mode"`
+	Active              *string `json:"active"`
+	HealthCheckInterval float64 `json:"health_check_interval"`
+	ConnectTimeout      float64 `json:"connect_timeout"`
+	Failover            bool    `json:"failover"`
+	ProbeURL            string  `json:"probe_url"`
+	ProbeTimeout        float64 `json:"probe_timeout"`
+	// AllowCIDRs 是监听非本机地址时允许的来源（IP 或网段）。
+	// 为空表示只接受本机连接；回环地址始终允许。
+	AllowCIDRs []string `json:"allow_cidrs"`
+	// DenyCIDRs 是拒绝来源（IP 或网段），优先级高于 AllowCIDRs；回环同样不受限。
+	DenyCIDRs []string   `json:"deny_cidrs"`
+	Upstreams []Upstream `json:"upstreams"`
 
 	// extra 保留未知字段，保存时原样写回（与 Python 的 dict.update 行为一致）。
 	extra map[string]json.RawMessage
@@ -71,6 +77,8 @@ func Default() Config {
 		Failover:            true,
 		ProbeURL:            "http://connectivitycheck.gstatic.com/generate_204",
 		ProbeTimeout:        3,
+		AllowCIDRs:          []string{},
+		DenyCIDRs:           []string{},
 		Upstreams:           []Upstream{},
 	}
 }
@@ -78,7 +86,7 @@ func Default() Config {
 var knownKeys = map[string]struct{}{
 	"listen": {}, "mode": {}, "active": {}, "health_check_interval": {},
 	"connect_timeout": {}, "failover": {}, "probe_url": {}, "probe_timeout": {},
-	"upstreams": {},
+	"allow_cidrs": {}, "deny_cidrs": {}, "upstreams": {},
 }
 
 // UnmarshalJSON 在默认值之上合并文件内容，并保留未知字段。
@@ -131,6 +139,12 @@ func (c *Config) normalize() {
 		}
 	}
 	c.Upstreams = out
+	if c.AllowCIDRs == nil {
+		c.AllowCIDRs = []string{}
+	}
+	if c.DenyCIDRs == nil {
+		c.DenyCIDRs = []string{}
+	}
 }
 
 // Home 返回配置目录，可用 PSWITCH_HOME 覆盖。
@@ -338,4 +352,103 @@ func SplitHostPortDefault(s string, def *int) (string, int, error) {
 // JoinHostPort 统一拼接 host:port（IPv6 请传带方括号的 host）。
 func JoinHostPort(host string, port int) string {
 	return host + ":" + strconv.Itoa(port)
+}
+
+// --------------------------------------------------------------------------
+// LAN 监听 / 允许来源
+// --------------------------------------------------------------------------
+
+const cidrExample = "示例: 192.168.3.40 / 192.168.3.0/24"
+
+// NormalizeCIDR 把 IP 或网段规范成 "ip/prefix"：192.168.3.40 -> 192.168.3.40/32。
+func NormalizeCIDR(entry string) (string, error) {
+	text := strings.TrimSpace(entry)
+	if text == "" {
+		return "", fmt.Errorf("空的 IP / 网段")
+	}
+	if strings.Contains(text, "/") {
+		_, network, err := net.ParseCIDR(text)
+		if err != nil {
+			return "", fmt.Errorf("不是合法的 IP 或网段: %s（%s）", text, cidrExample)
+		}
+		return network.String(), nil
+	}
+	ip := net.ParseIP(text)
+	if ip == nil {
+		return "", fmt.Errorf("不是合法的 IP 或网段: %s（%s）", text, cidrExample)
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		return ip4.String() + "/32", nil
+	}
+	return ip.String() + "/128", nil
+}
+
+// NormalizeCIDRs 规范化一组条目并去重，保持输入顺序。
+func NormalizeCIDRs(entries []string) ([]string, error) {
+	out := make([]string, 0, len(entries))
+	seen := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		network, err := NormalizeCIDR(entry)
+		if err != nil {
+			return nil, err
+		}
+		if !seen[network] {
+			seen[network] = true
+			out = append(out, network)
+		}
+	}
+	return out, nil
+}
+
+// ParseCIDRs 解析来源列表；非法项忽略（手改配置时容错）。
+func ParseCIDRs(entries []string) []*net.IPNet {
+	out := make([]*net.IPNet, 0, len(entries))
+	for _, entry := range entries {
+		network, err := NormalizeCIDR(entry)
+		if err != nil {
+			continue
+		}
+		if _, parsed, err := net.ParseCIDR(network); err == nil {
+			out = append(out, parsed)
+		}
+	}
+	return out
+}
+
+// PeerAllowed 判断来源 IP 是否允许：回环始终允许，deny 优先于 allow。
+func PeerAllowed(allow, deny []*net.IPNet, ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() {
+		return true
+	}
+	for _, network := range deny {
+		if network != nil && network.Contains(ip) {
+			return false
+		}
+	}
+	for _, network := range allow {
+		if network != nil && network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsLoopbackHost 判断监听地址是否只面向本机。
+func IsLoopbackHost(host string) bool {
+	if host == "" || host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// AllowText 返回给用户看的允许来源说明。
+func AllowText(entries []string) string {
+	if len(entries) == 0 {
+		return "无（仅本机可连接）"
+	}
+	return strings.Join(entries, ", ")
 }

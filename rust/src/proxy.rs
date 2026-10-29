@@ -22,6 +22,8 @@ pub struct Route {
     pub candidates: Vec<Upstream>,
     pub failover: bool,
     pub connect_timeout: Duration,
+    pub allow: Vec<util::IpNet>,
+    pub deny: Vec<util::IpNet>,
 }
 
 pub struct Server {
@@ -51,6 +53,8 @@ impl Server {
             candidates: Vec::new(),
             failover: cfg.failover,
             connect_timeout: cfg.connect_timeout(),
+            allow: util::parse_allow(&cfg.allow_cidrs),
+            deny: util::parse_allow(&cfg.deny_cidrs),
         };
         Server {
             config_mtime: config::config_mtime(),
@@ -74,6 +78,8 @@ impl Server {
                 candidates: Vec::new(),
                 failover: self.cfg.failover,
                 connect_timeout: self.cfg.connect_timeout(),
+                allow: util::parse_allow(&self.cfg.allow_cidrs),
+                deny: util::parse_allow(&self.cfg.deny_cidrs),
             };
         }
 
@@ -106,6 +112,8 @@ impl Server {
             candidates,
             failover: self.cfg.failover,
             connect_timeout: self.cfg.connect_timeout(),
+            allow: util::parse_allow(&self.cfg.allow_cidrs),
+            deny: util::parse_allow(&self.cfg.deny_cidrs),
         }
     }
 
@@ -284,6 +292,14 @@ fn fallback_candidates(
 pub async fn handle_client(client: TcpStream, peer: SocketAddr, route: Arc<Route>) {
     let _ = client.set_nodelay(true);
 
+    if !util::peer_allowed(&route.allow, &route.deny, peer.ip()) {
+        log_warn!("拒绝来自 {} 的连接：不在允许来源列表中", peer);
+        if let Ok(std_stream) = client.into_std() {
+            let _ = std_stream.shutdown(std::net::Shutdown::Both);
+        }
+        return;
+    }
+
     if route.direct {
         direct::handle(client, route.connect_timeout, peer).await;
         return;
@@ -417,6 +433,20 @@ pub async fn serve_main() -> i32 {
                 server.cfg.mode,
                 active
             );
+        }
+    }
+
+    if let Ok((host, _)) = util::split_hostport(&listen) {
+        if !util::is_loopback_host(&host) {
+            let allow = if server.cfg.allow_cidrs.is_empty() {
+                "无（仅本机）".to_string()
+            } else {
+                server.cfg.allow_cidrs.join(", ")
+            };
+            log_info!("允许来源（LAN）: {}", allow);
+            if !server.cfg.deny_cidrs.is_empty() {
+                log_info!("拒绝来源（LAN）: {}", server.cfg.deny_cidrs.join(", "));
+            }
         }
     }
 
