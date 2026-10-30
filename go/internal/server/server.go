@@ -58,6 +58,10 @@ func New(cfg config.Config, log *logging.Logger) *Server {
 
 // Run 监听端口并开始转发，直到 Stop 被调用。
 func (s *Server) Run() error {
+	// launchd 下的 fd 软上限默认只有 256，先抬到硬上限的一半再干活
+	if before, after, changed := config.RaiseFdLimit(); changed {
+		s.log.Infof("fd 软上限: %d -> %d", before, after)
+	}
 	s.checkAll()
 
 	host, port, err := config.SplitHostPort(s.cfg.Listen)

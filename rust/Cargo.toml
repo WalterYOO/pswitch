@@ -1,6 +1,6 @@
 [package]
 name = "pswitch"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
 description = "一个本地端口，多个上游代理，随时切换（Rust 实现，追求高吞吐与低延迟）"
 license = "MIT"

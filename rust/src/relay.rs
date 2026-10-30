@@ -6,6 +6,8 @@
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
+use crate::util;
+
 pub const BUF_SIZE: usize = 64 * 1024;
 
 /// 把两端对拷，直到两个方向都结束。`leftover` 是握手阶段多读出来的字节。
@@ -15,6 +17,9 @@ pub async fn relay(
     client_leftover: Vec<u8>,
     remote_leftover: Vec<u8>,
 ) {
+    // 两端都开 keepalive：对端悄悄掉线时，只有 keepalive 能把隧道判死并回收 fd
+    util::tune(&client);
+    util::tune(&remote);
     if !client_leftover.is_empty() && remote.write_all(&client_leftover).await.is_err() {
         return;
     }

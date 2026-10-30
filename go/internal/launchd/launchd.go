@@ -40,6 +40,14 @@ func Installed() bool {
 	return err == nil
 }
 
+// fdSoftLimit 与守护进程启动时一致：fd 硬上限的一半。
+func fdSoftLimit() uint64 {
+	if n := config.DesiredFdLimit(); n > 0 {
+		return n
+	}
+	return 46080
+}
+
 func plistText(exe string) string {
 	log := html.EscapeString(config.LogPath())
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
@@ -55,11 +63,15 @@ func plistText(exe string) string {
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ProcessType</key><string>Background</string>
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key><integer>%d</integer>
+  </dict>
   <key>StandardOutPath</key><string>%s</string>
   <key>StandardErrorPath</key><string>%s</string>
 </dict>
 </plist>
-`, html.EscapeString(Label()), html.EscapeString(exe), log, log)
+`, html.EscapeString(Label()), html.EscapeString(exe), fdSoftLimit(), log, log)
 }
 
 // WritePlist 写入 plist，ProgramArguments 指向当前可执行文件。

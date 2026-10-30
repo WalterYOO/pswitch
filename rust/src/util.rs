@@ -2,9 +2,128 @@
 
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpStream as StdTcpStream, ToSocketAddrs};
+use std::os::raw::{c_int, c_void};
+use std::os::unix::io::AsRawFd;
 use std::time::Duration;
 
 use tokio::net::TcpStream;
+
+// --------------------------------------------------------------------------
+// 进程资源限制
+// --------------------------------------------------------------------------
+
+/// 拿不到硬上限时的兜底值，仅用于把硬上限换算成目标值。
+const FALLBACK_HARD_FD: u64 = 1 << 16;
+
+fn current_limits() -> Option<libc::rlimit> {
+    let mut lim: libc::rlimit = unsafe { std::mem::zeroed() };
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) } != 0 {
+        return None;
+    }
+    Some(lim)
+}
+
+fn hard_fd_limit() -> u64 {
+    match current_limits() {
+        Some(lim) if lim.rlim_max != libc::RLIM_INFINITY => lim.rlim_max as u64,
+        _ => maxfiles_per_proc(),
+    }
+}
+
+/// fd 软上限的目标值：硬上限的一半（硬上限是 unlimited 时用 kern.maxfilesperproc 代替）。
+pub fn desired_fd_limit() -> u64 {
+    hard_fd_limit() / 2
+}
+
+/// 把 fd 软上限抬到硬上限的一半。
+///
+/// launchd 给守护进程的默认软上限只有 256，浏览器连接稍一多就会撞顶：accept 返回
+/// EMFILE，而 macOS 的 getaddrinfo 在 fd 耗尽后会退化成 EAI_NONAME，direct 模式于是
+/// 把所有域名请求都回成 502（纯 IP 目标反而正常）。
+pub fn raise_fd_limit() {
+    let mut lim = match current_limits() {
+        Some(l) => l,
+        None => return,
+    };
+    let target = desired_fd_limit() as libc::rlim_t;
+    if target > lim.rlim_cur {
+        let before = lim.rlim_cur;
+        lim.rlim_cur = target;
+        unsafe {
+            libc::setrlimit(libc::RLIMIT_NOFILE, &lim);
+        }
+        log_info!("fd 软上限: {} -> {}", before, target);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn maxfiles_per_proc() -> u64 {
+    const NAME: &[u8] = b"kern.maxfilesperproc\0";
+    let mut value: c_int = 0;
+    let mut size = std::mem::size_of::<c_int>() as libc::size_t;
+    let ok = unsafe {
+        libc::sysctlbyname(
+            NAME.as_ptr() as *const libc::c_char,
+            &mut value as *mut c_int as *mut c_void,
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if ok == 0 && value > 0 {
+        value as u64
+    } else {
+        FALLBACK_HARD_FD
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn maxfiles_per_proc() -> u64 {
+    FALLBACK_HARD_FD
+}
+
+// --------------------------------------------------------------------------
+// 套接字选项
+// --------------------------------------------------------------------------
+
+const KEEPALIVE_IDLE: c_int = 30;
+const KEEPALIVE_INTERVAL: c_int = 10;
+const KEEPALIVE_COUNT: c_int = 3;
+
+unsafe fn setsockopt_int(fd: c_int, level: c_int, name: c_int, value: c_int) {
+    libc::setsockopt(
+        fd,
+        level,
+        name,
+        &value as *const c_int as *const c_void,
+        std::mem::size_of::<c_int>() as libc::socklen_t,
+    );
+}
+
+/// 关闭 Nagle 并开启 TCP keepalive。
+///
+/// keepalive 是死隧道唯一的回收手段：对端机器掉线时不会有 FIN/RST，纯字节拷贝的
+/// 隧道会一直挂着，每条占两个 fd，攒够就把进程顶到上限。
+pub fn tune(stream: &TcpStream) {
+    let _ = stream.set_nodelay(true);
+    let fd = stream.as_raw_fd();
+    unsafe {
+        setsockopt_int(fd, libc::SOL_SOCKET, libc::SO_KEEPALIVE, 1);
+        setsockopt_int(fd, libc::IPPROTO_TCP, keep_idle_opt(), KEEPALIVE_IDLE);
+        setsockopt_int(fd, libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, KEEPALIVE_INTERVAL);
+        setsockopt_int(fd, libc::IPPROTO_TCP, libc::TCP_KEEPCNT, KEEPALIVE_COUNT);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn keep_idle_opt() -> c_int {
+    libc::TCP_KEEPALIVE
+}
+
+#[cfg(not(target_os = "macos"))]
+fn keep_idle_opt() -> c_int {
+    libc::TCP_KEEPIDLE
+}
 
 pub fn split_hostport(s: &str) -> Result<(String, u16), String> {
     let err = || format!("地址格式应为 host:port，收到 '{}'", s);
@@ -289,5 +408,22 @@ mod tests {
         for host in ["0.0.0.0", "192.168.3.40", "::"] {
             assert!(!is_loopback_host(host), "{host}");
         }
+    }
+
+    #[test]
+    fn fd_limit_target_is_usable() {
+        // 目标值是硬上限的一半，必须远高于 launchd 默认的 256
+        assert!(desired_fd_limit() > 256, "目标值太小: {}", desired_fd_limit());
+    }
+
+    #[tokio::test]
+    async fn tune_accepts_real_sockets() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let accept = tokio::spawn(async move { listener.accept().await.unwrap().0 });
+        let client = TcpStream::connect(addr).await.unwrap();
+        let server = accept.await.unwrap();
+        tune(&client);
+        tune(&server);
     }
 }

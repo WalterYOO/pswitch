@@ -25,14 +25,70 @@ from .config import (
     write_json,
 )
 from .direct import handle_direct
-from .stream import pipe as _pipe
+from .stream import pipe as _pipe, tune as _tune
 
 log = logging.getLogger("pswitch")
+
+# 拿不到 kern.maxfilesperproc 时的兜底值，仅用于把硬上限换算成目标值
+FALLBACK_HARD_FD = 1 << 16
 
 
 # --------------------------------------------------------------------------
 # 进程 / 端口辅助
 # --------------------------------------------------------------------------
+
+def _maxfiles_per_proc():
+    try:
+        import ctypes
+        libc = ctypes.CDLL(None, use_errno=True)
+        value = ctypes.c_int()
+        size = ctypes.c_size_t(ctypes.sizeof(value))
+        if libc.sysctlbyname(b"kern.maxfilesperproc", ctypes.byref(value),
+                             ctypes.byref(size), None, 0) == 0 and value.value > 0:
+            return value.value
+    except (OSError, AttributeError):
+        pass
+    return FALLBACK_HARD_FD
+
+
+def desired_fd_limit():
+    """fd 软上限的目标值：硬上限的一半；拿不到时返回 None。"""
+    try:
+        import resource
+    except ImportError:                     # 非 Unix
+        return None
+    try:
+        _, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    except (OSError, ValueError):
+        return None
+    if hard == resource.RLIM_INFINITY:
+        hard = _maxfiles_per_proc()
+    return hard // 2
+
+
+def raise_fd_limit():
+    """把 fd 软上限抬到硬上限的一半。
+
+    launchd 拉起守护进程时软上限只有 256，浏览器连接稍一多就会撞顶：accept 返回
+    EMFILE，而 macOS 的 getaddrinfo 在 fd 耗尽后会退化成 EAI_NONAME，direct 模式
+    于是把所有域名请求都回成 502（纯 IP 目标反而正常）。
+    """
+    try:
+        import resource
+    except ImportError:                     # 非 Unix
+        return
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        target = desired_fd_limit()
+    except (OSError, ValueError):
+        return
+    if target is None or target <= soft:
+        return
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+    except (OSError, ValueError):
+        return
+    log.info("fd 软上限: %s -> %s", soft, target)
 
 def read_pid():
     try:
@@ -262,6 +318,7 @@ class ProxyServer:
     # -- 连接处理 --------------------------------------------------------
     async def handle(self, creader, cwriter):
         peer = cwriter.get_extra_info("peername")
+        _tune(cwriter)
         if peer and not peer_allowed(self.cfg.get("allow_cidrs"),
                                       self.cfg.get("deny_cidrs"), peer[0]):
             log.warning("拒绝来自 %s 的连接：不在允许来源列表中", peer)
@@ -303,6 +360,7 @@ class ProxyServer:
             cwriter.close()
             return
 
+        _tune(uwriter)
         try:
             await asyncio.gather(
                 _pipe(creader, uwriter),
@@ -372,6 +430,8 @@ def setup_logging(foreground=False, debug=False):
 
 async def _serve(foreground, debug):
     setup_logging(foreground, debug)
+    # launchd 下的 fd 软上限默认只有 256，先抬到硬上限的一半再干活
+    raise_fd_limit()
     cfg = load_config()
     # direct 模式不依赖上游，允许零上游启动
     if cfg.get("mode") != "direct" and not enabled_upstreams(cfg):

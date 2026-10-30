@@ -7,6 +7,25 @@
 0.1.5 及更早版本没有独立的变更文件，可查看 git 历史与
 [tags](https://github.com/WalterYOO/pswitch/tags)。
 
+## [0.1.9] - 2026-10-30
+
+三份实现（Python / Go / Rust）统一发布 0.1.9。
+
+### 修复
+
+- **direct 模式下域名请求全部 502**：launchd 给守护进程的 fd 软上限默认只有
+  256，浏览器连接多起来后撞顶，`accept` 返回 EMFILE；macOS 的 `getaddrinfo`
+  在 fd 耗尽时会退化成 `EAI_NONAME`，于是所有按域名建连的 CONNECT / SOCKS5
+  都失败（纯 IP 目标反而正常）。守护进程启动时把 fd 软上限抬到硬上限的一半
+  （硬上限为 unlimited 时取 `kern.maxfilesperproc` 的一半），并在生成的
+  launchd plist 里写入 `SoftResourceLimits.NumberOfFiles`。
+
+### 变更
+
+- **隧道两端开启 TCP keepalive**（Rust / Python 新增，Go 原本已有）：对端机器
+  掉线时不会有 FIN/RST，之前这类死隧道会一直占着 fd 累积到上限；现在空闲 30
+  秒后开始探测，间隔 10 秒、3 次无响应即回收连接。
+
 ## [0.1.8] - 2026-10-29
 
 三份实现（Python / Go / Rust）统一发布 0.1.8。

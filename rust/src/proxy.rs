@@ -290,7 +290,7 @@ fn fallback_candidates(
 // --------------------------------------------------------------------------
 
 pub async fn handle_client(client: TcpStream, peer: SocketAddr, route: Arc<Route>) {
-    let _ = client.set_nodelay(true);
+    util::tune(&client);
 
     if !util::peer_allowed(&route.allow, &route.deny, peer.ip()) {
         log_warn!("拒绝来自 {} 的连接：不在允许来源列表中", peer);
@@ -383,6 +383,8 @@ async fn signal_task(stop: watch::Sender<bool>, reload: watch::Sender<u64>) {
 }
 
 pub async fn serve_main() -> i32 {
+    // launchd 下的 fd 软上限默认只有 256，先抬到硬上限的一半再干活
+    util::raise_fd_limit();
     let cfg = config::load_config();
 
     // direct 模式不依赖上游，允许零上游启动

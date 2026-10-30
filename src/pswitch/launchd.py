@@ -29,6 +29,12 @@ def program_args():
     return [sys.executable, "-m", "pswitch", "serve"]
 
 
+def fd_soft_limit():
+    """与守护进程启动时一致：fd 硬上限的一半。"""
+    from .proxy import desired_fd_limit
+    return desired_fd_limit() or 46080
+
+
 def plist_text():
     args = "".join(f"\n    <string>{a}</string>" for a in program_args())
     return f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -42,6 +48,10 @@ def plist_text():
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ProcessType</key><string>Background</string>
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key><integer>{fd_soft_limit()}</integer>
+  </dict>
   <key>StandardOutPath</key><string>{LOG_PATH}</string>
   <key>StandardErrorPath</key><string>{LOG_PATH}</string>
 </dict>

@@ -54,6 +54,10 @@ pub fn plist_text() -> String {
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ProcessType</key><string>Background</string>
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key><integer>{}</integer>
+  </dict>
   <key>StandardOutPath</key><string>{}</string>
   <key>StandardErrorPath</key><string>{}</string>
 </dict>
@@ -61,6 +65,7 @@ pub fn plist_text() -> String {
 "#,
         xml_escape(&label()),
         args,
+        crate::util::desired_fd_limit(),
         log,
         log
     )
